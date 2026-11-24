@@ -37,6 +37,7 @@ def get_save_params(
     progressive: bool = True,
     lossless: bool = False,
     optimize: bool = True,
+    subsampling: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Return PIL Image.save() keyword arguments for the given format.
@@ -47,6 +48,7 @@ def get_save_params(
         progressive: Enable progressive encoding for JPEG
         lossless: Use lossless compression (WebP / PNG)
         optimize: Enable optimizer pass (JPEG/PNG)
+        subsampling: Optional chroma subsampling for JPEG (0 = 4:4:4)
     """
     fmt = fmt.upper()
     if fmt == "JPEG":
@@ -57,6 +59,8 @@ def get_save_params(
         }
         if progressive:
             params["progressive"] = True
+        if subsampling is not None:
+            params["subsampling"] = subsampling
         return params
 
     if fmt == "PNG":

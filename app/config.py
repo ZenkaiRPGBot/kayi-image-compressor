@@ -63,6 +63,9 @@ class Config:
     processing_timeout_seconds: int
     daily_user_limit: int
     session_ttl_seconds: int
+    max_storage_budget_bytes: int
+    fsub_cache_ttl: int
+    fsub_timeout: float
 
     # Logging
     log_level: str
@@ -94,12 +97,23 @@ def load_config() -> Config:
     except ValueError:
         log_channel_id = 0
 
+    max_storage_mb = _int("MAX_STORAGE_MB", 50)
+
+    webhook_secret = _optional("WEBHOOK_SECRET")
+    is_prod = _bool("IS_PRODUCTION", False) or "onrender.com" in webhook_base_url
+    if is_prod and not webhook_secret:
+        # In production Render deployments, WEBHOOK_SECRET is required
+        raise EnvironmentError(
+            "WEBHOOK_SECRET is required in production deployment (Render). "
+            "Please configure WEBHOOK_SECRET in your environment."
+        )
+
     return Config(
         bot_token=bot_token,
         webhook_base_url=webhook_base_url,
-        webhook_secret=_optional("WEBHOOK_SECRET"),
+        webhook_secret=webhook_secret,
         port=_int("PORT", 10000),
-        bot_username=_optional("BOT_USERNAME", "BOT_USERNAME"),
+        bot_username=_optional("BOT_USERNAME", "KayiImgShrinkBot"),
         fsub_enabled=_bool("FSUB_ENABLED", False),
         fsub_channel=_optional("FSUB_CHANNEL", "@KayiBots"),
         fsub_channel_url=_optional("FSUB_CHANNEL_URL", "https://t.me/KayiBots"),
@@ -111,6 +125,9 @@ def load_config() -> Config:
         processing_timeout_seconds=_int("PROCESSING_TIMEOUT_SECONDS", 25),
         daily_user_limit=_int("DAILY_USER_LIMIT", 20),
         session_ttl_seconds=_int("SESSION_TTL_SECONDS", 600),
+        max_storage_budget_bytes=max_storage_mb * 1024 * 1024,
+        fsub_cache_ttl=_int("FSUB_CACHE_TTL", 45),
+        fsub_timeout=float(os.environ.get("FSUB_TIMEOUT", "5.0")),
         log_level=_optional("LOG_LEVEL", "INFO").upper(),
         owner_id=owner_id,
         log_channel_id=log_channel_id,

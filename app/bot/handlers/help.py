@@ -1,63 +1,64 @@
 """
 app/bot/handlers/help.py
 
-Handles /help and /privacy commands and their callback navigation.
+Handles /help and /privacy commands.
+Matches the official, clean typographic standard of the Kayi Bots ecosystem.
 """
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from aiogram import Router, F
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery
 
-from app.bot.keyboards.menus import (
-    build_help_keyboard,
-    build_help_privacy_keyboard,
-    build_start_keyboard,
-)
-from app.bot.messages.texts import HELP_MAIN, HELP_PRIVACY
+from app.bot.keyboards.menus import build_help_keyboard
+from app.bot.messages.texts import HELP_TEXT, PRIVACY_TEXT
 
 logger = logging.getLogger(__name__)
 router = Router(name="help")
 
 
-async def show_help_main(event: "Message | CallbackQuery", config: "Config") -> None:  # type: ignore[name-defined]
-    keyboard = build_help_keyboard()
+async def show_help_main(event: Message | CallbackQuery, config: Any) -> None:
+    keyboard = build_help_keyboard(developer_url="https://t.me/qouba")
     if isinstance(event, Message):
-        await event.answer(HELP_MAIN, parse_mode="HTML", reply_markup=keyboard)
+        await event.answer(
+            text=HELP_TEXT,
+            parse_mode=ParseMode.HTML,
+            reply_markup=keyboard,
+            disable_web_page_preview=True,
+        )
     elif isinstance(event, CallbackQuery):
-        await event.message.edit_text(HELP_MAIN, parse_mode="HTML", reply_markup=keyboard)
+        try:
+            await event.message.edit_text(
+                text=HELP_TEXT,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            await event.message.answer(
+                text=HELP_TEXT,
+                parse_mode=ParseMode.HTML,
+                reply_markup=keyboard,
+                disable_web_page_preview=True,
+            )
         await event.answer()
 
 
 @router.message(Command("help"))
-async def cmd_help(message: Message, config: "Config") -> None:  # type: ignore[name-defined]
+async def cmd_help(message: Message, config: Any) -> None:
     await show_help_main(message, config)
 
 
 @router.message(Command("privacy"))
 async def cmd_privacy(message: Message) -> None:
-    keyboard = build_help_privacy_keyboard()
-    await message.answer(HELP_PRIVACY, parse_mode="HTML", reply_markup=keyboard)
-
-
-@router.callback_query(F.data == "help:main")
-async def cb_help_main(callback: CallbackQuery, config: "Config") -> None:  # type: ignore[name-defined]
-    await show_help_main(callback, config)
-
-
-@router.callback_query(F.data == "help:privacy")
-async def cb_help_privacy(callback: CallbackQuery) -> None:
-    keyboard = build_help_privacy_keyboard()
-    await callback.message.edit_text(HELP_PRIVACY, parse_mode="HTML", reply_markup=keyboard)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "help:back")
-async def cb_help_back(callback: CallbackQuery, config: "Config") -> None:  # type: ignore[name-defined]
-    """Return to the start screen."""
-    from app.bot.messages.texts import WELCOME_TEXT
-    keyboard = build_start_keyboard(channel_url=config.fsub_channel_url)
-    await callback.message.edit_text(WELCOME_TEXT, parse_mode="HTML", reply_markup=keyboard)
-    await callback.answer()
+    keyboard = build_help_keyboard(developer_url="https://t.me/qouba")
+    await message.answer(
+        text=PRIVACY_TEXT,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+        disable_web_page_preview=True,
+    )

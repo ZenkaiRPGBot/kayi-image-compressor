@@ -49,10 +49,58 @@ def cleanup_orphaned_files(max_age_seconds: int = 3600) -> int:
     return removed
 
 
-def make_temp_path(extension: str = "jpg") -> str:
+def enforce_storage_budget(max_bytes: int = 50 * 1024 * 1024) -> int:
+    """
+    Enforce global disk storage budget for temporary files.
+    If total size of kayicomp_* files exceeds max_bytes, prunes oldest files
+    until usage drops below 80% of max_bytes.
+    Returns count of pruned files.
+    """
+    tmp_dir = tempfile.gettempdir()
+    pattern = os.path.join(tmp_dir, f"{TEMP_PREFIX}*")
+    file_list = []
+    total_size = 0
+
+    for path in glob.glob(pattern):
+        try:
+            st = os.stat(path)
+            file_list.append((path, st.st_size, st.st_mtime))
+            total_size += st.st_size
+        except OSError:
+            pass
+
+    if total_size <= max_bytes:
+        return 0
+
+    # Sort oldest first
+    file_list.sort(key=lambda x: x[2])
+    target_size = int(max_bytes * 0.8)
+    pruned = 0
+
+    for path, size, _ in file_list:
+        try:
+            os.remove(path)
+            total_size -= size
+            pruned += 1
+            if total_size <= target_size:
+                break
+        except OSError:
+            pass
+
+    if pruned:
+        logger.warning(
+            "Storage budget exceeded! Pruned %d oldest temp files, current total: %.1f MB",
+            pruned, total_size / (1024 * 1024)
+        )
+    return pruned
+
+
+def make_temp_path(extension: str = "jpg", max_budget_bytes: int = 50 * 1024 * 1024) -> str:
     """
     Create a unique temp file path (file is NOT created).
     Caller is responsible for writing and deleting the file.
+    Also ensures storage budget is enforced before new files accumulate.
     """
     import uuid
+    enforce_storage_budget(max_budget_bytes)
     return os.path.join(tempfile.gettempdir(), f"{TEMP_PREFIX}{uuid.uuid4().hex}.{extension}")

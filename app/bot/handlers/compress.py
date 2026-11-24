@@ -1,154 +1,204 @@
 """
 app/bot/handlers/compress.py
 
-Handles image upload flow:
-  - /compress command
-  - Photo messages
-  - Document messages (image files)
-  - Custom target size text input
+Handles image uploads (photos and documents), input validation,
+smart image card presentation, and custom size text inputs.
 """
 from __future__ import annotations
 
 import logging
 import os
-import asyncio
-import tempfile
-import uuid
-from concurrent.futures import ProcessPoolExecutor
+import re
+from typing import Any
 
 from aiogram import Router, F, Bot
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 
-from app.bot.keyboards.menus import build_image_options_keyboard
+from app.bot.keyboards.menus import build_image_options_keyboard, build_result_keyboard
 from app.bot.messages.texts import (
-    IMAGE_RECEIVED,
-    PROCESSING,
-    TARGET_PROMPT,
-    TARGET_INVALID,
-    SESSION_EXPIRED,
-    COMPRESSION_FAILED,
-    TIMEOUT_ERROR,
-    RESULT_SUCCESS,
-    RESULT_GREW,
-    TARGET_MET,
-    TARGET_NOT_MET,
-    ANOTHER_IMAGE,
+    IMAGE_CARD_TEMPLATE,
+    PROCESSING_TEXT,
+    RESULT_CAPTION_TEMPLATE,
+    RESULT_ALREADY_OPTIMAL,
+    FORM_VALIDATION_FAILED,
+    QUEUE_BUSY_TEXT,
+    SESSION_EXPIRED_TEXT,
 )
-from app.compression.engine import compress_image_sync, CompressionResult
+from app.compression.engine import run_compression_isolated, CompressionResult
 from app.compression.formats import FORMAT_EXTENSIONS
 from app.compression.presets import CompressionRequest, Preset
 from app.compression.validation import validate_image_file
-from app.services.cleanup import cleanup_session_files, make_temp_path
-from app.services.sessions import SessionStore
+from app.services.cleanup import make_temp_path, cleanup_session_files
+from app.services.sessions import SessionStore, UserSession
 
 logger = logging.getLogger(__name__)
 router = Router(name="compress")
 
-# Global process pool — 1 worker, shared across all requests
-_pool: ProcessPoolExecutor | None = None
 
-
-def get_pool() -> ProcessPoolExecutor:
-    global _pool
-    if _pool is None:
-        _pool = ProcessPoolExecutor(max_workers=1)
-    return _pool
-
-
-def _fmt_size(b: int) -> str:
+def format_bytes(b: int) -> str:
     if b >= 1024 * 1024:
         return f"{b / (1024 * 1024):.2f} MB"
     return f"{b / 1024:.1f} KB"
 
 
-def _fmt_dimensions(w: int, h: int) -> str:
-    return f"{w}×{h}"
+async def deliver_compression_result(
+    message: Message,
+    session: UserSession,
+    result: CompressionResult,
+    config: Any,
+) -> None:
+    """Builds and delivers the final result card with 1-tap retry buttons."""
+    stats = result.stats
+    if not stats:
+        await message.answer("❌ Compression failed. No output generated.", parse_mode=ParseMode.HTML)
+        return
 
+    # Target line
+    target_line = ""
+    if stats.target_bytes:
+        target_kb = stats.target_bytes // 1024
+        if stats.target_met:
+            target_line = f"• <b>Target:</b> <code>{target_kb} KB (Met ✓)</code>\n"
+        else:
+            actual_kb = round(stats.output_bytes / 1024)
+            target_line = f"• <b>Target:</b> <code>{target_kb} KB (Closest: {actual_kb} KB)</code>\n"
 
-async def _download_file(bot: Bot, file_id: str, dest_path: str) -> None:
-    """Download a Telegram file to dest_path."""
-    file = await bot.get_file(file_id)
-    await bot.download_file(file.file_path, destination=dest_path)
+    # Background disclosure
+    bg_line = f"• <b>Background:</b> <i>{result.background_treatment}</i>\n" if result.background_treatment else ""
+
+    # Suggestion line
+    sugg_line = f"\n{result.suggestion}\n" if result.suggestion else ""
+
+    caption = RESULT_CAPTION_TEMPLATE.format(
+        original_size=stats.original_size_str,
+        output_size=stats.output_size_str,
+        saved=stats.saved_str,
+        reduction=stats.reduction_percent,
+        fmt=stats.output_format,
+        dimensions=stats.dimensions_str,
+        target_line=target_line,
+        background_line=bg_line,
+        suggestion_line=sugg_line,
+    )
+
+    if result.form_validation_errors:
+        err_text = "\n".join(f"• {e}" for e in result.form_validation_errors)
+        caption += f"\n" + FORM_VALIDATION_FAILED.format(errors=err_text)
+
+    # Keyboard with 1-tap retries
+    markup = build_result_keyboard(session.session_id)
+
+    # Deliver document
+    input_file = FSInputFile(result.output_path, filename=os.path.basename(result.output_path))
+    await message.answer_document(
+        document=input_file,
+        caption=caption,
+        parse_mode=ParseMode.HTML,
+        reply_markup=markup,
+    )
 
 
 async def _handle_image_upload(
     message: Message,
     file_id: str,
     file_size: int,
-    config: "Config",  # type: ignore[name-defined]
+    config: Any,
     sessions: SessionStore,
-    rate_limiter: "RateLimiter",  # type: ignore[name-defined]
+    rate_limiter: Any,
 ) -> None:
-    """
-    Common handler for photo and document image uploads.
-    Downloads, validates, creates session, shows options.
-    """
     user = message.from_user
+    if not user:
+        return
 
-    # Rate limit — record usage
-    rate_limiter.record(user.id)
+    # 1. Rate limiter check before downloading
+    allowed, reason = rate_limiter.check(user.id)
+    if not allowed:
+        await message.answer(f"⚠️ <b>Rate Limit</b>\n\n{reason}", parse_mode=ParseMode.HTML)
+        return
 
-    # Check file size from Telegram metadata
+    # 2. Max size check on Telegram file metadata before downloading
     if file_size > config.max_upload_bytes:
         limit_mb = config.max_upload_bytes / (1024 * 1024)
         await message.answer(
-            f"❌ File too large ({_fmt_size(file_size)}). Maximum is {limit_mb:.0f} MB.",
-            parse_mode="HTML",
+            f"❌ <b>File Too Large</b>\n\n"
+            f"Image is {format_bytes(file_size)}. Maximum upload allowed is {limit_mb:.0f} MB.",
+            parse_mode=ParseMode.HTML,
         )
         return
 
-    # Send "downloading…" indicator
-    status_msg = await message.answer("⏳ Analysing your image…", parse_mode="HTML")
+    status_msg = await message.answer("⚡ <i>Analysing image...</i>", parse_mode=ParseMode.HTML)
 
-    # Download
-    ext = "bin"
-    input_path = make_temp_path(ext)
+    # 3. Download to unique temp file
+    temp_path = make_temp_path("bin", config.max_storage_budget_bytes)
     try:
-        await _download_file(message.bot, file_id, input_path)
+        tg_file = await message.bot.get_file(file_id)
+        if not tg_file.file_path:
+            await status_msg.edit_text("❌ Could not retrieve file from Telegram.", parse_mode=ParseMode.HTML)
+            cleanup_session_files(temp_path)
+            return
+        await message.bot.download_file(tg_file.file_path, destination=temp_path)
     except Exception as e:
-        await status_msg.edit_text(f"❌ Failed to download image: {e}", parse_mode="HTML")
+        logger.error("Download failed for user %s: %s", user.id, e)
+        await status_msg.edit_text(f"❌ Failed to download file: {e}", parse_mode=ParseMode.HTML)
+        cleanup_session_files(temp_path)
         return
 
-    # Validate
-    validation = validate_image_file(input_path, config.max_upload_bytes, config.max_image_pixels)
-    if not validation.ok:
-        cleanup_session_files(input_path)
-        await status_msg.edit_text(f"❌ {validation.error_message}", parse_mode="HTML")
+    # 4. Strict validation (magic bytes, pixel limit, decompression bombs, animated check)
+    v = validate_image_file(temp_path, config.max_upload_bytes, config.max_image_pixels)
+    if not v.ok:
+        cleanup_session_files(temp_path)
+        await status_msg.edit_text(f"❌ <b>Image Rejected</b>\n\n{v.error_message}", parse_mode=ParseMode.HTML)
         return
 
-    # Create session
+    rate_limiter.record(user.id)
+
+    # 5. Initialize session
     session = sessions.create(user.id)
     session.input_file_id = file_id
-    session.input_file_path = input_path
-    session.input_file_size = validation.file_size
-    session.input_format = validation.format
-    session.input_dimensions = validation.dimensions
+    session.input_file_path = temp_path
+    session.input_file_size = v.file_size
+    session.input_format = v.format
+    session.input_dimensions = v.dimensions
     session.state = "waiting_choice"
 
-    w, h = validation.dimensions
-    text = IMAGE_RECEIVED.format(
-        fmt=validation.format,
-        size=_fmt_size(validation.file_size),
-        dimensions=_fmt_dimensions(w, h),
+    # Smart suggestion
+    suggestion = ""
+    w, h = v.dimensions
+    if w > 2500 or h > 2500:
+        suggestion = "💡 <i>Tip: Large resolution detected. Resizing will achieve massive size reduction.</i>\n"
+    elif v.file_size < 40 * 1024:
+        suggestion = "💡 <i>Notice: Image is already under 40 KB.</i>\n"
+
+    card_text = IMAGE_CARD_TEMPLATE.format(
+        fmt=v.format,
+        size=format_bytes(v.file_size),
+        dimensions=f"{w}×{h}",
+        suggestion=suggestion,
     )
-    keyboard = build_image_options_keyboard(session.session_id)
-    await status_msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)
+    markup = build_image_options_keyboard(session.session_id)
+
+    await status_msg.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 @router.message(Command("compress"))
 async def cmd_compress(message: Message) -> None:
-    await message.answer("Send me an image (JPEG, PNG, or WebP) and I'll compress it for you.", parse_mode="HTML")
+    await message.answer(
+        "<b>Compress an Image</b>\n\n"
+        "Send me any JPEG, PNG, or WebP photo or file to begin.",
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.message(F.photo)
 async def handle_photo(
     message: Message,
-    config: "Config",  # type: ignore[name-defined]
+    config: Any,
     sessions: SessionStore,
-    rate_limiter: "RateLimiter",  # type: ignore[name-defined]
+    rate_limiter: Any,
 ) -> None:
-    photo = message.photo[-1]  # Largest available
+    photo = message.photo[-1]
     await _handle_image_upload(
         message=message,
         file_id=photo.file_id,
@@ -162,18 +212,19 @@ async def handle_photo(
 @router.message(F.document)
 async def handle_document(
     message: Message,
-    config: "Config",  # type: ignore[name-defined]
+    config: Any,
     sessions: SessionStore,
-    rate_limiter: "RateLimiter",  # type: ignore[name-defined]
+    rate_limiter: Any,
 ) -> None:
     doc = message.document
-    mime = doc.mime_type or ""
+    mime = (doc.mime_type or "").lower()
     if mime not in ("image/jpeg", "image/png", "image/webp"):
         await message.answer(
-            "Please send a JPEG, PNG, or WebP image file.",
-            parse_mode="HTML",
+            "<b>Unsupported Format</b>\n\nPlease send a JPEG, PNG, or WebP image file.",
+            parse_mode=ParseMode.HTML,
         )
         return
+
     await _handle_image_upload(
         message=message,
         file_id=doc.file_id,
@@ -185,121 +236,85 @@ async def handle_document(
 
 
 @router.message(F.text & ~F.text.startswith("/"))
-async def handle_text_input(
+async def handle_custom_text(
     message: Message,
     sessions: SessionStore,
+    config: Any,
 ) -> None:
-    """
-    Handles free-text input — used for custom target size entry.
-    """
+    """Parses custom sizes in KB/MB or dimensions in WxH."""
     user = message.from_user
+    if not user:
+        return
     session = sessions.get_by_user(user.id)
-    if session is None or session.state != "waiting_target_input":
-        return  # Not in an active target-size flow; ignore
-
-    text = message.text.strip().replace("kb", "").replace("KB", "").replace("mb", "").strip()
-    try:
-        kb = int(float(text))
-        if kb <= 0:
-            raise ValueError
-    except ValueError:
-        await message.answer(TARGET_INVALID, parse_mode="HTML")
+    if not session:
         return
 
-    session.pending_target_kb = kb
-    session.state = "waiting_choice"
+    text = message.text.strip().lower()
 
-    # Trigger compression immediately
-    await _run_compression_target(message, session, kb * 1024, sessions)
+    # --- Mode: Custom Target Size ---
+    if session.state == "waiting_target_input":
+        # Check for MB or KB
+        kb_val = 0
+        mb_match = re.search(r"(\d+(?:\.\d+)?)\s*mb", text)
+        kb_match = re.search(r"(\d+(?:\.\d+)?)\s*kb", text)
+        num_match = re.search(r"^(\d+(?:\.\d+)?)$", text)
 
+        if mb_match:
+            kb_val = int(float(mb_match.group(1)) * 1024)
+        elif kb_match:
+            kb_val = int(float(kb_match.group(1)))
+        elif num_match:
+            kb_val = int(float(num_match.group(1)))
 
-async def _run_compression_target(
-    message: Message,
-    session: "UserSession",  # type: ignore[name-defined]
-    target_bytes: int,
-    sessions: SessionStore,
-) -> None:
-    """Run target-size compression and deliver result."""
-    from app.bot.keyboards.menus import build_result_keyboard
+        if kb_val <= 0 or kb_val > 50 * 1024:
+            await message.answer("⚠️ Please enter a valid size between 10 KB and 50 MB (e.g. <code>150 KB</code> or <code>1.5 MB</code>).", parse_mode=ParseMode.HTML)
+            return
 
-    status_msg = await message.answer(PROCESSING, parse_mode="HTML")
-    session.state = "processing"
+        session.last_mode = "target"
+        session.last_target_kb = kb_val
+        session.state = "processing"
 
-    input_path = session.input_file_path
-    output_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
-    output_path = make_temp_path(output_ext)
+        status_msg = await message.answer(PROCESSING_TEXT, parse_mode=ParseMode.HTML)
 
-    request = CompressionRequest(
-        input_path=input_path,
-        output_path=output_path,
-        target_bytes=target_bytes,
-        output_format=session.input_format,
-        allow_resize=True,
-        strip_metadata=True,
-    )
+        out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
+        output_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
 
-    loop = asyncio.get_event_loop()
-    try:
-        result: CompressionResult = await asyncio.wait_for(
-            loop.run_in_executor(get_pool(), compress_image_sync, request),
-            timeout=25.0,
+        req = CompressionRequest(
+            input_path=session.input_file_path,
+            output_path=output_path,
+            target_bytes=kb_val * 1024,
+            output_format=session.input_format,
+            allow_resize=True,
+            strip_metadata=True,
         )
-    except asyncio.TimeoutError:
-        session.state = "error"
-        await status_msg.edit_text(TIMEOUT_ERROR, parse_mode="HTML")
-        cleanup_session_files(input_path, output_path)
-        sessions.delete(session.session_id)
-        return
-    except Exception as e:
-        session.state = "error"
-        await status_msg.edit_text(COMPRESSION_FAILED.format(error=str(e)), parse_mode="HTML")
-        cleanup_session_files(input_path, output_path)
-        sessions.delete(session.session_id)
-        return
 
-    if not result.success or not result.stats:
-        await status_msg.edit_text(COMPRESSION_FAILED.format(error=result.error), parse_mode="HTML")
-        cleanup_session_files(input_path, output_path)
-        sessions.delete(session.session_id)
-        return
+        try:
+            res = await run_compression_isolated(req, timeout_seconds=config.processing_timeout_seconds)
+            session.output_file_path = res.output_path
+            session.state = "done"
+            await status_msg.delete()
+            await deliver_compression_result(message, session, res, config)
+        except asyncio.TimeoutError:
+            session.state = "error"
+            await status_msg.edit_text("⏱ Processing timed out. Worker process was terminated.", parse_mode=ParseMode.HTML)
+        except Exception as e:
+            session.state = "error"
+            await status_msg.edit_text(f"❌ Processing error: {e}", parse_mode=ParseMode.HTML)
 
-    stats = result.stats
-    w, h = stats.output_dimensions
+    # --- Mode: Custom Form Size ---
+    elif session.state == "waiting_form_size_input":
+        num_match = re.search(r"(\d+)", text)
+        if not num_match or int(num_match.group(1)) <= 0:
+            await message.answer("⚠️ Please enter a valid number of KB (e.g. <code>50</code>).", parse_mode=ParseMode.HTML)
+            return
 
-    if stats.grew:
-        caption = RESULT_GREW.format(
-            output_size=stats.output_size_str,
-            original_size=stats.original_size_str,
+        kb_val = int(num_match.group(1))
+        session.form_max_kb = kb_val
+        session.state = "waiting_choice"
+
+        from app.bot.keyboards.menus import build_form_upload_keyboard
+        await message.answer(
+            f"✦ <b>Max Size Set:</b> <code>{kb_val} KB</code>\n\nNext, select required output format:",
+            parse_mode=ParseMode.HTML,
+            reply_markup=build_form_upload_keyboard(session.session_id, stage="format"),
         )
-    else:
-        caption = RESULT_SUCCESS.format(
-            original_size=stats.original_size_str,
-            output_size=stats.output_size_str,
-            saved=stats.saved_str,
-            reduction=stats.reduction_percent,
-            fmt=stats.output_format,
-            dimensions=_fmt_dimensions(w, h),
-        )
-        if result.target_result:
-            if result.target_result.success:
-                caption += TARGET_MET.format(target_kb=target_bytes // 1024)
-            else:
-                caption += TARGET_NOT_MET.format(
-                    actual_kb=round(stats.output_bytes / 1024),
-                    reason=result.target_result.reason,
-                )
-
-    keyboard = build_result_keyboard(session.session_id)
-    try:
-        await status_msg.delete()
-        await message.answer_document(
-            document=open(result.output_path, "rb"),
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
-    except Exception as e:
-        await message.answer(f"❌ Failed to send result: {e}", parse_mode="HTML")
-    finally:
-        cleanup_session_files(input_path, output_path)
-        sessions.delete(session.session_id)

@@ -36,3 +36,49 @@ class TestPendingStartParam:
         set_pending_start_param(user_id=2002, param="about")
         assert get_and_clear_pending_start_param(2001) == "help"
         assert get_and_clear_pending_start_param(2002) == "about"
+
+
+class TestFSubCache:
+    def test_cache_hit_and_expiry(self):
+        import time
+        from app.bot.middlewares.fsub import FSubCache
+        c = FSubCache(default_ttl=1)
+        c.set(user_id=10, is_member=True)
+        assert c.get(user_id=10) is True
+
+        time.sleep(1.05)
+        # Should be expired
+        assert c.get(user_id=10) is None
+
+    def test_cache_invalidate(self):
+        from app.bot.middlewares.fsub import FSubCache
+        c = FSubCache(default_ttl=60)
+        c.set(user_id=11, is_member=True)
+        assert c.get(user_id=11) is True
+        c.invalidate(11)
+        assert c.get(user_id=11) is None
+
+
+@pytest.mark.asyncio
+async def test_fresh_membership_check_bypasses_cache():
+    from unittest.mock import AsyncMock, MagicMock
+    from app.bot.middlewares.fsub import check_channel_membership, cache
+
+    # Setup mock bot
+    mock_bot = MagicMock()
+    mock_member = MagicMock()
+    mock_member.status = "member"
+    mock_bot.get_chat_member = AsyncMock(return_value=mock_member)
+
+    # First set stale negative cache
+    cache.set(user_id=999, is_member=False, ttl=60)
+
+    # Without bypass -> returns cached False
+    is_member, _ = await check_channel_membership(mock_bot, user_id=999, bypass_cache=False)
+    assert not is_member
+    mock_bot.get_chat_member.assert_not_called()
+
+    # With bypass_cache=True (e.g. clicking "I've Joined") -> calls API and returns True!
+    is_member, _ = await check_channel_membership(mock_bot, user_id=999, bypass_cache=True)
+    assert is_member
+    mock_bot.get_chat_member.assert_called_once()

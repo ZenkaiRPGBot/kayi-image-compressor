@@ -64,3 +64,15 @@ class TestSessionStore:
         store = SessionStore(ttl_seconds=60)
         s = store.create(user_id=9001)
         assert s.user_id == 9001
+
+    def test_max_sessions_eviction(self):
+        store = SessionStore(ttl_seconds=60, max_sessions=2)
+        s1 = store.create(user_id=1)
+        s2 = store.create(user_id=2)
+        assert store.count() == 2
+        # Creating a 3rd should evict the oldest (s1)
+        s3 = store.create(user_id=3)
+        assert store.count() == 2
+        assert store.get(s1.session_id) is None
+        assert store.get(s2.session_id) is not None
+        assert store.get(s3.session_id) is not None

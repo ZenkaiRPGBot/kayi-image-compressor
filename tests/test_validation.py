@@ -92,3 +92,17 @@ class TestValidateImageFile:
         result = validate_image_file(p, MAX_BYTES, 12_000_000)
         assert not result.ok
         assert "megapixel" in result.error_message.lower() or "MP" in result.error_message
+
+    def test_animated_image_rejected(self, tmp_path):
+        from PIL import Image
+        import io
+        # Create an animated multi-frame WebP
+        frames = [Image.new("RGB", (100, 100), (255, 0, 0)), Image.new("RGB", (100, 100), (0, 255, 0))]
+        buf = io.BytesIO()
+        frames[0].save(buf, format="WEBP", save_all=True, append_images=frames[1:], duration=200, loop=0)
+        p = str(tmp_path / "animated.webp")
+        with open(p, "wb") as f:
+            f.write(buf.getvalue())
+        result = validate_image_file(p, MAX_BYTES, MAX_PIXELS)
+        assert not result.ok
+        assert "animated" in result.error_message.lower()

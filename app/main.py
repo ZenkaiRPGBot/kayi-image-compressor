@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from concurrent.futures import ProcessPoolExecutor
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -56,8 +55,6 @@ async def main() -> None:
         daily_limit=config.daily_user_limit,
         cooldown_seconds=3.0,
     )
-    pool = ProcessPoolExecutor(max_workers=config.max_concurrent_jobs)
-    callbacks.set_pool(pool)
 
     # ── 4. Bot + Dispatcher ────────────────────────────────────────────────
     bot = Bot(
@@ -126,7 +123,6 @@ async def main() -> None:
         cleanup_task.cancel()
         await bot.delete_webhook()
         await bot.session.close()
-        pool.shutdown(wait=False)
         await runner.cleanup()
         logger.info("Shutdown complete.")
 

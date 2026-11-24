@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
@@ -28,6 +29,7 @@ class TargetSizeResult:
     quality_used: Optional[int]
     dimensions_used: Tuple[int, int]
     reason: str = ""
+    already_compliant: bool = False
 
 
 def _encode_to_bytes(img: "Image.Image", fmt: str, quality: int) -> bytes:
@@ -52,22 +54,40 @@ def find_quality_for_target(
     fmt: str,
     output_path: str,
     allow_resize: bool = False,
-    max_iterations: int = 10,
+    max_iterations: int = 7,
+    original_file_path: Optional[str] = None,
 ) -> TargetSizeResult:
     """
     Binary search over JPEG/WebP quality to hit target_bytes.
 
-    Strategy:
-    1. Try quality binary search (q=5..95) for up to `max_iterations` steps.
-    2. If quality search fails and allow_resize=True, try 75%, 50%, 25% dimensions
-       at the lowest quality found.
-    3. Write the best result to output_path.
+    Strict rules:
+    - Never mark an output that exceeds target_bytes as success=True.
+    - If original file already satisfies target_bytes and format, avoid unnecessary re-encoding.
+    - Bound iterations to max_iterations (default 7) for CPU safety.
     """
     fmt = fmt.upper()
+    orig_dims = img.size
+
+    # Check if original already satisfies target and format
+    if original_file_path and os.path.exists(original_file_path):
+        orig_size = os.path.getsize(original_file_path)
+        orig_fmt = (img.format or "").upper()
+        if orig_size <= target_bytes and (orig_fmt == fmt or not fmt):
+            shutil.copyfile(original_file_path, output_path)
+            return TargetSizeResult(
+                success=True,
+                output_path=output_path,
+                actual_bytes=orig_size,
+                quality_used=None,
+                dimensions_used=orig_dims,
+                reason="Original image already meets the target size.",
+                already_compliant=True,
+            )
+
     img = normalize_mode_for_format(img, fmt)
     img = handle_transparency(img, fmt)
 
-    # For PNG/lossless: just encode and check
+    # For PNG/lossless: encode with max compression
     if fmt == "PNG":
         buf = io.BytesIO()
         params = get_save_params(fmt, quality=85, optimize=True)
@@ -82,11 +102,12 @@ def find_quality_for_target(
             actual_bytes=len(data),
             quality_used=None,
             dimensions_used=img.size,
-            reason="" if success else f"PNG lossless result ({len(data)} bytes) exceeds target ({target_bytes} bytes).",
+            reason="" if success else f"PNG lossless size ({len(data) // 1024} KB) exceeds target ({target_bytes // 1024} KB). Try JPEG/WebP or enable resizing.",
         )
 
+    # Binary search over quality [5..95]
     low, high = 5, 95
-    best_quality = low
+    best_quality: Optional[int] = None
     best_data: Optional[bytes] = None
 
     for _ in range(max_iterations):
@@ -97,7 +118,7 @@ def find_quality_for_target(
         size = len(data)
 
         if size <= target_bytes:
-            # Fits — try higher quality
+            # Fits — save and try higher quality
             best_quality = mid
             best_data = data
             low = mid + 1
@@ -116,11 +137,12 @@ def find_quality_for_target(
             dimensions_used=img.size,
         )
 
-    # Quality search failed — try dimension reduction if allowed
+    # Quality search alone failed — try dimension reduction if allowed
     if allow_resize:
-        for scale in (0.75, 0.5, 0.25):
+        for scale in (0.75, 0.50, 0.35, 0.25):
             small = _resize_image(img, scale)
-            data = _encode_to_bytes(small, fmt, 50)
+            # Try at quality 60 first for good visual fidelity
+            data = _encode_to_bytes(small, fmt, 60)
             if len(data) <= target_bytes:
                 with open(output_path, "wb") as f:
                     f.write(data)
@@ -128,12 +150,25 @@ def find_quality_for_target(
                     success=True,
                     output_path=output_path,
                     actual_bytes=len(data),
-                    quality_used=50,
+                    quality_used=60,
                     dimensions_used=small.size,
-                    reason=f"Resized to {int(scale*100)}% of original dimensions to meet target.",
+                    reason=f"Resized to {int(scale * 100)}% of original dimensions to meet target.",
+                )
+            # Try lowest quality at this scale
+            data = _encode_to_bytes(small, fmt, 20)
+            if len(data) <= target_bytes:
+                with open(output_path, "wb") as f:
+                    f.write(data)
+                return TargetSizeResult(
+                    success=True,
+                    output_path=output_path,
+                    actual_bytes=len(data),
+                    quality_used=20,
+                    dimensions_used=small.size,
+                    reason=f"Resized to {int(scale * 100)}% at lower quality to meet target.",
                 )
 
-    # Complete failure — write smallest result
+    # If completely unattainable: encode at q=5, write output, but strictly return success=False
     if best_data is None:
         best_data = _encode_to_bytes(img, fmt, 5)
         best_quality = 5
@@ -152,6 +187,6 @@ def find_quality_for_target(
         reason=(
             f"Could not reach {target_kb:.0f} KB target. "
             f"Smallest achievable size is {actual_kb:.0f} KB. "
-            "Try enabling resize or choosing a larger target."
+            + ("Try enabling resize or choosing a larger target." if not allow_resize else "The image has too much detail for this target.")
         ),
     )

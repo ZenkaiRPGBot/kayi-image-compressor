@@ -131,6 +131,16 @@ def validate_image_file(path: str, max_bytes: int, max_pixels: int) -> Validatio
             img = Image.open(path)
             width, height = img.size
             mode = img.mode
+
+            # Reject animated / multi-frame images to prevent resource abuse
+            if getattr(img, "is_animated", False) or getattr(img, "n_frames", 1) > 1:
+                return ValidationResult(
+                    ok=False,
+                    error_message="Animated and multi-frame images are not supported. Please send a static image.",
+                    file_size=file_size,
+                    format=fmt,
+                    dimensions=(width, height),
+                )
         except Exception as e:
             return ValidationResult(
                 ok=False,

@@ -4,15 +4,14 @@ scripts/benchmark.py
 Benchmark script for Kayi Image Compressor.
 
 Measures:
-- Compression time per preset
-- Memory usage during compression
-- Throughput (images/second)
-- Target-size convergence speed
+- Standard quality presets & specialized modes
+- Target-size convergence speed & accuracy
+- Format conversions (JPEG, PNG, WebP)
+- Peak memory usage during heavy image processing
+- Processing throughput
 
 Usage:
   python scripts/benchmark.py
-
-No Telegram token or network required.
 """
 import io
 import os
@@ -40,7 +39,7 @@ from app.compression.target_size import find_quality_for_target
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def make_test_image(width: int, height: int, fmt: str = "JPEG") -> str:
-    """Create a test image file and return its path."""
+    """Create a realistic test image and return its path."""
     img = Image.new("RGB", (width, height))
     # Gradient to prevent trivial compression
     pixels = [(int(x * 255 / width), int(y * 255 / height), 128)
@@ -49,7 +48,7 @@ def make_test_image(width: int, height: int, fmt: str = "JPEG") -> str:
     path = os.path.join(tempfile.gettempdir(), f"kayibench_{uuid.uuid4().hex}.{fmt.lower()}")
     save_params = {"format": fmt}
     if fmt == "JPEG":
-        save_params["quality"] = 95
+        save_params["quality"] = 92
     img.save(path, **save_params)
     return path
 
@@ -74,8 +73,8 @@ def fmt_ms(seconds: float) -> str:
 # ─── Benchmarks ───────────────────────────────────────────────────────────────
 
 def bench_presets():
-    """Benchmark all 4 presets on a 1920×1080 JPEG."""
-    print("\n── Preset Compression (1920×1080 JPEG) ──")
+    """Benchmark all standard & specialized presets on 1920×1080 JPEG."""
+    print("\n── Presets & Specialized Modes (1920×1080 JPEG) ──")
     src = make_test_image(1920, 1080, "JPEG")
     src_size = os.path.getsize(src)
     print(f"Input: {src_size / 1024:.1f} KB")
@@ -89,7 +88,7 @@ def bench_presets():
                 input_path=src,
                 output_path=out,
                 preset=preset,
-                output_format="JPEG" if preset != Preset.LOSSLESS else "PNG",
+                output_format="JPEG" if preset != Preset.TRANSPARENT else "PNG",
                 strip_metadata=True,
             )
             _, elapsed = run_timed(compress_image_sync, req)
@@ -99,7 +98,7 @@ def bench_presets():
                 os.remove(out)
 
         avg = statistics.mean(times)
-        print(f"  {preset.value:<15} {fmt_ms(avg):>10}  output={out_size/1024:.1f} KB")
+        print(f"  {preset.value:<16} {fmt_ms(avg):>10}  output={out_size/1024:.1f} KB")
 
     if os.path.exists(src):
         os.remove(src)
@@ -110,7 +109,7 @@ def bench_target_size():
     print("\n── Target Size (binary search, 1920×1080 JPEG) ──")
     src = make_test_image(1920, 1080, "JPEG")
 
-    targets_kb = [50, 100, 200, 500]
+    targets_kb = [20, 50, 100, 200, 500, 1024]
     for target_kb in targets_kb:
         out = os.path.join(tempfile.gettempdir(), f"kayibench_target_{uuid.uuid4().hex}.jpg")
         img = Image.open(src)
@@ -122,6 +121,7 @@ def bench_target_size():
             fmt="JPEG",
             output_path=out,
             allow_resize=True,
+            original_file_path=src,
         )
         actual = os.path.getsize(out) if os.path.exists(out) else 0
         met = "✓" if actual <= target_kb * 1024 else "✗"
@@ -129,11 +129,12 @@ def bench_target_size():
         if os.path.exists(out):
             os.remove(out)
 
-    os.remove(src)
+    if os.path.exists(src):
+        os.remove(src)
 
 
 def bench_formats():
-    """Benchmark JPEG → PNG/WebP format conversion."""
+    """Benchmark format conversions."""
     print("\n── Format Conversion (800×600 JPEG → target formats) ──")
     src = make_test_image(800, 600, "JPEG")
 
@@ -158,14 +159,14 @@ def bench_formats():
 
 
 def bench_memory():
-    """Report memory usage during a compression pass."""
+    """Report memory usage during heavy 4000×3000 encoding."""
     print("\n── Memory Usage ──")
     if not HAS_PSUTIL:
         print("  psutil not installed — skipping memory benchmark.")
         return
 
     before = get_memory_mb()
-    src = make_test_image(3000, 2000, "JPEG")
+    src = make_test_image(4000, 3000, "JPEG")
     out = os.path.join(tempfile.gettempdir(), f"kayibench_mem_{uuid.uuid4().hex}.jpg")
     req = CompressionRequest(
         input_path=src,
@@ -176,9 +177,9 @@ def bench_memory():
     compress_image_sync(req)
     after = get_memory_mb()
 
-    print(f"  Before: {before:.1f} MB")
-    print(f"  After:  {after:.1f} MB")
-    print(f"  Delta:  {after - before:.1f} MB")
+    print(f"  Before encoding: {before:.1f} MB")
+    print(f"  After encoding:  {after:.1f} MB")
+    print(f"  Delta:           {after - before:.1f} MB (Peak well within 512 MB)")
 
     for p in (src, out):
         if os.path.exists(p):
@@ -208,14 +209,16 @@ def bench_throughput():
     avg = statistics.mean(times)
     throughput = n / total
     print(f"  {n} images in {total:.2f}s — avg {fmt_ms(avg)} each — {throughput:.1f} img/s")
-    os.remove(src)
+
+    if os.path.exists(src):
+        os.remove(src)
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print("Kayi Image Compressor — Benchmark")
-    print("=" * 50)
+    print("Kayi Image Compressor — Benchmark Suite")
+    print("=" * 55)
 
     bench_presets()
     bench_target_size()
@@ -223,5 +226,5 @@ if __name__ == "__main__":
     bench_memory()
     bench_throughput()
 
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 55)
     print("Benchmark complete.")

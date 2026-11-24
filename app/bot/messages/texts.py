@@ -2,184 +2,104 @@
 app/bot/messages/texts.py
 
 All user-facing message text constants for Kayi Image Compressor.
-Uses Telegram HTML parse mode throughout.
+Matches the official visual and typographic standards of the Kayi Bots ecosystem:
+  - Clean Telegram HTML formatting
+  - Generous whitespace
+  - ✦ bullet points
+  - No decorative borders or excessive emojis
 """
 
-WELCOME_CAPTION = """\
-<b>Kayi Image Compressor</b>
+WELCOME_CAPTION = (
+    "<b>Welcome to Kayi Image Compressor</b>\n\n"
+    "Compress smarter. Share faster.\n\n"
+    "Reduce image file sizes for portals, forms, and sharing while preserving quality.\n\n"
+    "✦ Smart target-size compression\n"
+    "✦ Quality and specialized presets\n"
+    "✦ Form upload and custom dimensions\n"
+    "✦ Privacy-first metadata stripping\n\n"
+    "Need help? Use /help for instructions and feature guides.\n\n"
+    "<i>Send an image or file to begin.</i>"
+)
 
-Compress smarter. Share faster.
+WELCOME_TEXT = WELCOME_CAPTION
 
-Send me any image — JPEG, PNG, or WebP — and I'll reduce its file size while preserving as much quality as possible.
+HELP_TEXT = (
+    "<b>Kayi Image Compressor — Help</b>\n\n"
+    "Compress and optimize images with precision.\n\n"
+    "<b>Getting Started</b>\n\n"
+    "✦ Send any photo or image file (JPEG, PNG, WebP) directly to the bot.\n\n"
+    "✦ Choose a compression mode or target file size.\n\n"
+    "✦ Receive your compressed image with full optimization statistics.\n\n"
+    "<b>Compression Modes</b>\n\n"
+    "✦ <b>Auto Optimize</b> — Recommended one-tap balance of quality and file size.\n\n"
+    "✦ <b>Target Size</b> — Select 20 KB, 50 KB, 100 KB, 200 KB, 500 KB, 1 MB, or any custom size. Quality is calibrated using binary search.\n\n"
+    "✦ <b>Form Upload Mode</b> — Perfect for government, job, or university portals. Set exact or max dimensions, target file size, and fit preferences without distortion.\n\n"
+    "✦ <b>Specialized Presets</b> — Optimized modes for Photos, Screenshots/Text, Signatures, Form/ID Photos, and Transparent images.\n\n"
+    "✦ <b>Lossless Mode</b> — Optimizes file structure without altering a single decoded pixel.\n\n"
+    "<b>Privacy & Limits</b>\n\n"
+    "✦ EXIF metadata (camera, location, device details) is stripped by default.\n\n"
+    "✦ Max upload: 8 MB. Max resolution: 12 megapixels.\n\n"
+    "✦ All temporary processing files are purged immediately after delivery.\n\n"
+    "<b>Need Assistance?</b>\n\n"
+    "Contact @qouba if you encounter an issue."
+)
 
-<b>What I can do:</b>
-✦ Auto compress with one tap
-✦ Hit a specific target file size
-✦ Choose quality presets
-✦ Strip metadata for privacy
-✦ Convert between formats
+PRIVACY_TEXT = (
+    "<b>Privacy & Data Handling</b>\n\n"
+    "✦ <b>Ephemeral Processing</b> — Images are downloaded into temporary memory strictly during processing.\n\n"
+    "✦ <b>Metadata Removal</b> — EXIF headers (location coordinates, device info, timestamps) are stripped from compressed outputs by default.\n\n"
+    "✦ <b>Immediate Cleanup</b> — Processed files and sessions are purged immediately after delivery or upon session expiration (10 minutes).\n\n"
+    "✦ <b>No Tracking or Storage</b> — We do not permanently store images or sell user data.\n\n"
+    "<i>Notice: Temporary sessions reset whenever server updates occur.</i>"
+)
 
-Need help? Use /help for instructions and feature guides.\
-"""
+IMAGE_CARD_TEMPLATE = (
+    "<b>Image Received</b>\n\n"
+    "• <b>Format:</b> <code>{fmt}</code>\n"
+    "• <b>Size:</b> <code>{size}</code>\n"
+    "• <b>Dimensions:</b> <code>{dimensions}</code>\n\n"
+    "{suggestion}\n"
+    "<i>Select a compression option below:</i>"
+)
 
-WELCOME_TEXT = """\
-<b>Kayi Image Compressor</b>
+PROCESSING_TEXT = "⏳ <i>Compressing image...</i>"
 
-Compress smarter. Share faster.
+RESULT_CAPTION_TEMPLATE = (
+    "<b>Compressed Successfully ✅</b>\n\n"
+    "• <b>Original:</b> <code>{original_size}</code>\n"
+    "• <b>Compressed:</b> <code>{output_size}</code>\n"
+    "• <b>Saved:</b> <code>{saved} ({reduction}%)</code>\n"
+    "• <b>Format:</b> <code>{fmt}</code>\n"
+    "• <b>Dimensions:</b> <code>{dimensions}</code>\n"
+    "{target_line}"
+    "{background_line}"
+    "{suggestion_line}"
+)
 
-Send me any image — JPEG, PNG, or WebP — and I'll reduce its file size while preserving as much quality as possible.
+RESULT_ALREADY_OPTIMAL = (
+    "<b>Already Optimal ✅</b>\n\n"
+    "• <b>Original:</b> <code>{original_size}</code>\n"
+    "• <b>Current Size:</b> <code>{output_size}</code>\n"
+    "• <b>Format:</b> <code>{fmt}</code>\n\n"
+    "✦ The image is already optimally compressed without pixel loss.\n"
+    "✦ Further reduction requires lossy compression or resizing."
+)
 
-Need help? Use /help for instructions and feature guides.\
-"""
+FORM_VALIDATION_FAILED = (
+    "⚠️ <b>Form Requirement Alert</b>\n\n"
+    "The output was generated, but could not satisfy all strict constraints:\n\n"
+    "{errors}\n\n"
+    "<i>Try adjusting dimension constraints or enabling proportional padding.</i>"
+)
 
-FSUB_REQUIRED = """\
-<b>Join Required</b>
+QUEUE_BUSY_TEXT = (
+    "⚠️ <b>Compression Queue Busy</b>\n\n"
+    "The processing worker is currently handling maximum jobs. "
+    "Please try again in a few moments."
+)
 
-To use Kayi Image Compressor, please join our official channel first.
-
-This helps us keep the service running.\
-"""
-
-FSUB_NOT_JOINED = """\
-<b>Not Joined Yet</b>
-
-It looks like you haven't joined yet. Please join the channel and try again.\
-"""
-
-HELP_MAIN = """\
-<b>Kayi Image Compressor — Help</b>
-
-<b>Getting Started</b>
-Just send any image. I'll detect the format and show you compression options immediately.
-
-<b>Supported Formats</b>
-✦ Input: JPEG, PNG, WebP
-✦ Output: JPEG, PNG, WebP (choose during compression)
-
-<b>Compression Modes</b>
-
-<b>Auto Optimize</b>
-One tap — I pick the best quality-to-size balance automatically.
-
-<b>Quality Presets</b>
-✦ <b>Best Quality</b> — High quality, moderate reduction
-✦ <b>Balanced</b> — Good quality, significant reduction
-✦ <b>Smallest File</b> — Maximum reduction, reduced quality
-✦ <b>Lossless</b> — No quality loss (PNG/WebP only)
-
-<b>Target Size</b>
-Specify an exact target in KB. I'll binary-search the optimal quality to get as close as possible.
-
-<b>Limits</b>
-✦ Max upload: 8 MB per image
-✦ Max resolution: 12 megapixels
-✦ Daily limit: 20 compressions per user
-
-<b>Privacy</b>
-EXIF metadata (location, device info) is stripped by default.
-Use /privacy to learn more.\
-"""
-
-HELP_PRIVACY = """\
-<b>Privacy & Data Handling</b>
-
-<b>Your images are processed securely:</b>
-
-✦ Files are downloaded temporarily for processing only.
-✦ EXIF metadata (location, device, timestamps) is stripped from all outputs by default.
-✦ Processed files are deleted immediately after delivery.
-✦ No images are stored on disk beyond the active session.
-✦ Sessions expire after 10 minutes of inactivity.
-✦ No user data is sold or shared with third parties.
-
-<b>Limitations</b>
-Session data (your current image) is stored in memory only and is not persisted across bot restarts.\
-"""
-
-IMAGE_RECEIVED = """\
-<b>Image Received</b>
-
-<b>Format:</b> {fmt}
-<b>Size:</b> {size}
-<b>Dimensions:</b> {dimensions}
-
-How would you like to compress it?\
-"""
-
-PROCESSING = "⏳ Compressing your image…"
-
-QUEUE_FULL = """\
-<b>Queue Full</b>
-
-The compression queue is currently at capacity. Please try again in a moment.\
-"""
-
-RATE_LIMITED = """\
-<b>Slow Down</b>
-
-{reason}\
-"""
-
-RESULT_SUCCESS = """\
-<b>Compressed Successfully</b>
-
-<b>Original:</b> {original_size}
-<b>Compressed:</b> {output_size}
-<b>Saved:</b> {saved} ({reduction}%)
-<b>Format:</b> {fmt}
-<b>Dimensions:</b> {dimensions}\
-"""
-
-RESULT_GREW = """\
-<b>Compression Result</b>
-
-The compressed file is slightly larger than the original ({output_size} vs {original_size}).
-This can happen with already-optimized images or lossless formats.
-
-The original quality has been preserved.\
-"""
-
-TARGET_MET = "\n\n✦ <b>Target met:</b> {target_kb} KB"
-TARGET_NOT_MET = "\n\n⚠️ <b>Target not met.</b> Closest achievable: {actual_kb} KB\n{reason}"
-
-COMPRESSION_FAILED = """\
-<b>Compression Failed</b>
-
-Something went wrong while processing your image.
-
-{error}
-
-Please try again or send a different image.\
-"""
-
-TIMEOUT_ERROR = """\
-<b>Processing Timeout</b>
-
-Your image took too long to process and the job was cancelled.
-
-This can happen with very large or complex images. Please try a smaller image or a different preset.\
-"""
-
-SESSION_EXPIRED = """\
-<b>Session Expired</b>
-
-Your compression session has expired. Please send your image again.\
-"""
-
-TARGET_PROMPT = """\
-<b>Enter Target Size</b>
-
-Send the target file size in KB (e.g. <code>200</code> for 200 KB).
-
-Current image: {size}\
-"""
-
-TARGET_INVALID = """\
-<b>Invalid Size</b>
-
-Please enter a number in KB (e.g. <code>200</code> for 200 KB).\
-"""
-
-CANCEL_OK = "✦ Cancelled. Send another image any time."
-
-ANOTHER_IMAGE = "Send me another image to compress."
+SESSION_EXPIRED_TEXT = (
+    "⚠️ <b>Session Expired</b>\n\n"
+    "Your temporary compression session has timed out (10 min limit). "
+    "Please send your image again to continue."
+)
