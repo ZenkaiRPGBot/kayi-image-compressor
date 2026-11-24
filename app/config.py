@@ -5,10 +5,16 @@ All settings are loaded from environment variables at startup.
 Missing required variables raise an error immediately.
 """
 import os
+import re
 from dataclasses import dataclass, field
 from dotenv import load_dotenv
 
 load_dotenv()
+
+
+def _sanitize_secret(val: str) -> str:
+    """Telegram Bot API only allows A-Z, a-z, 0-9, _ and - for secret_token."""
+    return re.sub(r"[^A-Za-z0-9_-]", "", val.strip())
 
 
 def _require(key: str) -> str:
@@ -105,7 +111,8 @@ def load_config() -> Config:
 
     max_storage_mb = _int("MAX_STORAGE_MB", 50)
 
-    webhook_secret = _optional("WEBHOOK_SECRET")
+    raw_secret = _optional("WEBHOOK_SECRET")
+    webhook_secret = _sanitize_secret(raw_secret)
     is_prod = _bool("IS_PRODUCTION", False) or "onrender.com" in webhook_base_url
     if is_prod and not webhook_secret:
         # In production Render deployments, WEBHOOK_SECRET is required
