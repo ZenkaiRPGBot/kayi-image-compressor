@@ -72,6 +72,12 @@ class Config:
     owner_id: int
     log_channel_id: int
 
+    # Render Cloud Hosting Metadata
+    render_email: str
+    render_service_name: str
+    render_repo: str
+    render_used_hours: float
+
     @property
     def webhook_url(self) -> str:
         base = self.webhook_base_url.rstrip("/")
@@ -108,6 +114,14 @@ def load_config() -> Config:
             "Please configure WEBHOOK_SECRET in your environment."
         )
 
+    render_email = _optional("RENDER_EMAIL", "")
+    render_service_name = _optional("RENDER_SERVICE_NAME", "kayi-image-compressor")
+    render_repo = _optional("RENDER_REPO", "ZenkaiRPGBot/kayi-image-compressor")
+    try:
+        render_used_hours = float(_optional("RENDER_USED_HOURS", "0.0"))
+    except ValueError:
+        render_used_hours = 0.0
+
     return Config(
         bot_token=bot_token,
         webhook_base_url=webhook_base_url,
@@ -131,4 +145,8 @@ def load_config() -> Config:
         log_level=_optional("LOG_LEVEL", "INFO").upper(),
         owner_id=owner_id,
         log_channel_id=log_channel_id,
+        render_email=render_email,
+        render_service_name=render_service_name,
+        render_repo=render_repo,
+        render_used_hours=render_used_hours,
     )

@@ -29,7 +29,8 @@ from app.services.rate_limits import RateLimiter
 from app.services.queue import JobQueue
 from app.bot.middlewares.fsub import FSubMiddleware
 from app.bot.middlewares.rate_limit import RateLimitMiddleware
-from app.bot.handlers import start, help, compress, callbacks
+from app.bot.handlers import start, help, compress, callbacks, usage
+from app.bot.handlers.usage import register_bot_commands
 from app.web.webhook import build_webhook_app
 
 logging.basicConfig(
@@ -76,10 +77,11 @@ async def main() -> None:
     # ── 7. Routers ─────────────────────────────────────────────────────────
     dp.include_router(start.router)
     dp.include_router(help.router)
+    dp.include_router(usage.router)
     dp.include_router(callbacks.router)  # callbacks before compress to avoid message routing conflicts
     dp.include_router(compress.router)
 
-    # ── 8. Register webhook ────────────────────────────────────────────────
+    # ── 8. Register webhook & commands ────────────────────────────────────
     webhook_url = config.webhook_url
     logger.info("Registering webhook: %s", webhook_url)
     await bot.set_webhook(
@@ -88,6 +90,7 @@ async def main() -> None:
         drop_pending_updates=True,
         allowed_updates=["message", "callback_query"],
     )
+    await register_bot_commands(bot, config)
 
     # Confirm registration
     wh_info = await bot.get_webhook_info()
