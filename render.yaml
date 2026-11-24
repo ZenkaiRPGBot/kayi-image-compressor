@@ -40,3 +40,9 @@ services:
         value: "600"
       - key: LOG_LEVEL
         value: "INFO"
+      - key: OWNER_ID
+        value: "986380678"
+      - key: LOG_CHANNEL_ID
+        value: "-1004495645007"
+      - key: PYTHONUNBUFFERED
+        value: "1"
