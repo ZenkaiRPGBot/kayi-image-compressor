@@ -46,21 +46,23 @@ class UserSession:
     state: str = "idle"   # idle → waiting_choice → waiting_target_input → waiting_form_* → processing → done
 
     # Historical parameters for 1-tap Retries
-    last_mode: str = "auto"              # "auto", "preset", "target", "form"
+    last_mode: str = "auto"              # "auto", "preset", "target"
     last_preset: Optional[str] = None
     last_target_kb: Optional[int] = None
     last_quality: int = 75
     last_allow_resize: bool = False
     last_output_format: str = ""
 
-    # Form Upload Mode configuration state
-    form_max_kb: Optional[int] = None
-    form_format: str = ""               # "JPEG", "PNG", "WEBP", "KEEP"
-    form_fit_mode: str = "fit"          # "fit", "pad", "crop"
-    form_exact_w: int = 0
-    form_exact_h: int = 0
-    form_max_w: int = 0
-    form_max_h: int = 0
+    # Unified Advanced Settings (applies to both Auto Compress & Target Size)
+    selected_format: str = ""           # "" = keep original, or "JPEG", "PNG", "WEBP"
+    selected_preset: str = "balanced"   # "best_quality", "balanced", "smallest", "lossless"
+    strip_metadata: bool = True
+    scale_percent: float = 1.0          # 1.0 = 100%, 0.75 = 75%, etc.
+    exact_width: int = 0
+    exact_height: int = 0
+    max_width: int = 0
+    max_height: int = 0
+    fit_mode: str = "fit"               # "fit", "pad", "crop"
 
     def touch(self) -> None:
         self.last_accessed = time.monotonic()

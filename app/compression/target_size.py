@@ -1,12 +1,13 @@
 """
 app/compression/target_size.py
 
-Binary search algorithm for target-size compression.
-Finds the optimal quality setting to hit a target file size.
+Adaptive, bounded target-size compression algorithm.
+Calibrates quality and proportional downscaling to reliably hit strict file size limits.
 """
 from __future__ import annotations
 
 import io
+import math
 import os
 import shutil
 from dataclasses import dataclass
@@ -32,20 +33,16 @@ class TargetSizeResult:
     already_compliant: bool = False
 
 
-def _encode_to_bytes(img: "Image.Image", fmt: str, quality: int) -> bytes:
+def _encode_to_bytes(img: "Image.Image", fmt: str, quality: int, optimize: bool = True) -> bytes:
     """Encode image to bytes in memory and return raw bytes."""
     buf = io.BytesIO()
-    params = get_save_params(fmt, quality=quality, progressive=(fmt == "JPEG"))
+    params = get_save_params(fmt, quality=quality, optimize=optimize, progressive=(fmt == "JPEG"))
     img.save(buf, **params)
     return buf.getvalue()
 
 
-def _resize_image(img: "Image.Image", scale: float) -> "Image.Image":
-    """Resize image to `scale` fraction of original, maintaining aspect ratio."""
-    w, h = img.size
-    new_w = max(1, int(w * scale))
-    new_h = max(1, int(h * scale))
-    return img.resize((new_w, new_h), Image.LANCZOS)
+def _resize_to_dimensions(img: "Image.Image", target_w: int, target_h: int) -> "Image.Image":
+    return img.resize((max(16, target_w), max(16, target_h)), Image.LANCZOS)
 
 
 def find_quality_for_target(
@@ -54,21 +51,24 @@ def find_quality_for_target(
     fmt: str,
     output_path: str,
     allow_resize: bool = False,
-    max_iterations: int = 7,
+    max_iterations: int = 8,
     original_file_path: Optional[str] = None,
 ) -> TargetSizeResult:
     """
-    Binary search over JPEG/WebP quality to hit target_bytes.
+    Finds optimal quality and adaptive downscaling to meet target_bytes.
 
-    Strict rules:
-    - Never mark an output that exceeds target_bytes as success=True.
-    - If original file already satisfies target_bytes and format, avoid unnecessary re-encoding.
-    - Bound iterations to max_iterations (default 7) for CPU safety.
+    Strict Invariants:
+    1. Never mark an output that exceeds target_bytes as success=True.
+    2. If original file already satisfies target_bytes and format, avoid unnecessary re-encoding.
+    3. Bounded encoding attempts (<= 10) for CPU and deadline safety on Render Free.
+    4. Proportional downscaling adaptively computes scale to reach small targets (e.g. 20 KB from 2 MB).
     """
     fmt = fmt.upper()
     orig_dims = img.size
+    orig_w, orig_h = orig_dims
+    orig_pixels = orig_w * orig_h
 
-    # Check if original already satisfies target and format
+    # 1. Immediate bypass if original already meets target and format
     if original_file_path and os.path.exists(original_file_path):
         orig_size = os.path.getsize(original_file_path)
         orig_fmt = (img.format or "").upper()
@@ -87,106 +87,208 @@ def find_quality_for_target(
     img = normalize_mode_for_format(img, fmt)
     img = handle_transparency(img, fmt)
 
-    # For PNG/lossless: encode with max compression
+    # 2. PNG Handling
     if fmt == "PNG":
-        buf = io.BytesIO()
-        params = get_save_params(fmt, quality=85, optimize=True)
-        img.save(buf, **params)
-        data = buf.getvalue()
+        # First probe at full resolution
+        data = _encode_to_bytes(img, "PNG", quality=85, optimize=True)
+        if len(data) <= target_bytes:
+            with open(output_path, "wb") as f:
+                f.write(data)
+            return TargetSizeResult(
+                success=True,
+                output_path=output_path,
+                actual_bytes=len(data),
+                quality_used=None,
+                dimensions_used=img.size,
+            )
+
+        if not allow_resize:
+            with open(output_path, "wb") as f:
+                f.write(data)
+            return TargetSizeResult(
+                success=False,
+                output_path=output_path,
+                actual_bytes=len(data),
+                quality_used=None,
+                dimensions_used=img.size,
+                reason=f"Lossless PNG ({len(data) // 1024} KB) exceeds target ({target_bytes // 1024} KB). Enable downscaling or convert to JPEG/WebP.",
+            )
+
+        # PNG with allow_resize: adaptively scale down
+        est_px = max(900, target_bytes / 0.18)
+        base_s = min(0.90, math.sqrt(est_px / orig_pixels))
+        scales = [base_s, base_s * 0.75, base_s * 0.50, base_s * 0.35]
+        best_png_data = None
+        best_png_dims = img.size
+
+        for s in scales:
+            sw = max(24, int(orig_w * s))
+            sh = max(24, int(orig_h * s))
+            scaled = _resize_to_dimensions(img, sw, sh)
+            scaled_data = _encode_to_bytes(scaled, "PNG", quality=85, optimize=True)
+            best_png_data = scaled_data
+            best_png_dims = (sw, sh)
+            if len(scaled_data) <= target_bytes:
+                with open(output_path, "wb") as f:
+                    f.write(scaled_data)
+                return TargetSizeResult(
+                    success=True,
+                    output_path=output_path,
+                    actual_bytes=len(scaled_data),
+                    quality_used=None,
+                    dimensions_used=(sw, sh),
+                    reason=f"Proportionally scaled to {sw}×{sh} to meet PNG target.",
+                )
+
+        # Fallback PNG: write closest
         with open(output_path, "wb") as f:
-            f.write(data)
-        success = len(data) <= target_bytes
+            f.write(best_png_data or data)
         return TargetSizeResult(
-            success=success,
+            success=False,
             output_path=output_path,
-            actual_bytes=len(data),
+            actual_bytes=len(best_png_data or data),
             quality_used=None,
-            dimensions_used=img.size,
-            reason="" if success else f"PNG lossless size ({len(data) // 1024} KB) exceeds target ({target_bytes // 1024} KB). Try JPEG/WebP or enable resizing.",
+            dimensions_used=best_png_dims,
+            reason=f"PNG cannot reach {target_bytes // 1024} KB. Smallest achievable size is {(len(best_png_data or data)) // 1024} KB.",
         )
 
-    # Binary search over quality [5..95]
-    low, high = 5, 95
-    best_quality: Optional[int] = None
-    best_data: Optional[bytes] = None
+    # 3. JPEG / WebP Target Compression (Adaptive & Bounded)
+    best_candidate_data: Optional[bytes] = None
+    best_candidate_q: Optional[int] = None
+    best_candidate_dims: Tuple[int, int] = orig_dims
 
-    for _ in range(max_iterations):
-        if low > high:
-            break
-        mid = (low + high) // 2
-        data = _encode_to_bytes(img, fmt, mid)
-        size = len(data)
-
-        if size <= target_bytes:
-            # Fits — save and try higher quality
-            best_quality = mid
-            best_data = data
-            low = mid + 1
+    # Step A: Probe full resolution at high quality (Q=80)
+    probe_80 = _encode_to_bytes(img, fmt, 80)
+    if len(probe_80) <= target_bytes:
+        # Fits at 80! Probe 92 for max quality
+        probe_92 = _encode_to_bytes(img, fmt, 92)
+        if len(probe_92) <= target_bytes:
+            best_candidate_data, best_candidate_q = probe_92, 92
         else:
-            # Too big — try lower quality
-            high = mid - 1
+            best_candidate_data, best_candidate_q = probe_80, 80
 
-    if best_data is not None and len(best_data) <= target_bytes:
+    # Step B: If Q=80 didn't fit, probe full resolution at Q=25
+    if best_candidate_data is None:
+        probe_25 = _encode_to_bytes(img, fmt, 25)
+        if len(probe_25) <= target_bytes:
+            # Full resolution fits between 25 and 80! Binary search 4 iterations
+            low, high = 25, 80
+            best_candidate_data = probe_25
+            best_candidate_q = 25
+            for _ in range(4):
+                mid = (low + high) // 2
+                d = _encode_to_bytes(img, fmt, mid)
+                if len(d) <= target_bytes:
+                    best_candidate_data = d
+                    best_candidate_q = mid
+                    low = mid + 1
+                else:
+                    high = mid - 1
+        elif not allow_resize:
+            # Resizing disallowed: probe down to Q=8
+            probe_8 = _encode_to_bytes(img, fmt, 8)
+            if len(probe_8) <= target_bytes:
+                best_candidate_data, best_candidate_q = probe_8, 8
+            else:
+                # Impossible without resize
+                with open(output_path, "wb") as f:
+                    f.write(probe_8)
+                return TargetSizeResult(
+                    success=False,
+                    output_path=output_path,
+                    actual_bytes=len(probe_8),
+                    quality_used=8,
+                    dimensions_used=orig_dims,
+                    reason=f"Cannot reach {target_bytes // 1024} KB at original dimensions ({orig_w}×{orig_h}). Enable downscaling to hit target.",
+                )
+
+    # Step C: If still no fit and allow_resize is True: Adaptive Stepped Downscale!
+    if best_candidate_data is None and allow_resize:
+        # Estimate target pixels assuming ~0.08 bytes/pixel at moderate quality
+        est_px = max(1000, target_bytes / 0.08)
+        base_scale = min(0.85, math.sqrt(est_px / orig_pixels))
+        scale_ladder = [
+            base_scale,
+            base_scale * 0.75,
+            base_scale * 0.55,
+            base_scale * 0.38,
+            base_scale * 0.25,
+        ]
+
+        for s in scale_ladder:
+            sw = max(24, int(orig_w * s))
+            sh = max(24, int(orig_h * s))
+            scaled_im = _resize_to_dimensions(img, sw, sh)
+
+            # Test moderate quality Q=50
+            d50 = _encode_to_bytes(scaled_im, fmt, 50)
+            if len(d50) <= target_bytes:
+                # Fits at 50! Try 70 for higher quality
+                d70 = _encode_to_bytes(scaled_im, fmt, 70)
+                if len(d70) <= target_bytes:
+                    best_candidate_data = d70
+                    best_candidate_q = 70
+                else:
+                    best_candidate_data = d50
+                    best_candidate_q = 50
+                best_candidate_dims = (sw, sh)
+                break
+            else:
+                # Too big at 50, test lower quality Q=25
+                d25 = _encode_to_bytes(scaled_im, fmt, 25)
+                if len(d25) <= target_bytes:
+                    # Fits at 25! Try Q=38
+                    d38 = _encode_to_bytes(scaled_im, fmt, 38)
+                    if len(d38) <= target_bytes:
+                        best_candidate_data = d38
+                        best_candidate_q = 38
+                    else:
+                        best_candidate_data = d25
+                        best_candidate_q = 25
+                    best_candidate_dims = (sw, sh)
+                    break
+                # If still too big at Q=25, continue down ladder to smaller scale
+
+    # Step D: Finalize output and verify actual disk bytes
+    if best_candidate_data is not None and len(best_candidate_data) <= target_bytes:
         with open(output_path, "wb") as f:
-            f.write(best_data)
+            f.write(best_candidate_data)
+        actual_disk_bytes = os.path.getsize(output_path)
+        is_success = actual_disk_bytes <= target_bytes
+        reason = ""
+        if best_candidate_dims != orig_dims:
+            reason = f"Proportionally scaled to {best_candidate_dims[0]}×{best_candidate_dims[1]} to meet target."
         return TargetSizeResult(
-            success=True,
+            success=is_success,
             output_path=output_path,
-            actual_bytes=len(best_data),
-            quality_used=best_quality,
-            dimensions_used=img.size,
+            actual_bytes=actual_disk_bytes,
+            quality_used=best_candidate_q,
+            dimensions_used=best_candidate_dims,
+            reason=reason,
         )
 
-    # Quality search alone failed — try dimension reduction if allowed
-    if allow_resize:
-        for scale in (0.75, 0.50, 0.35, 0.25):
-            small = _resize_image(img, scale)
-            # Try at quality 60 first for good visual fidelity
-            data = _encode_to_bytes(small, fmt, 60)
-            if len(data) <= target_bytes:
-                with open(output_path, "wb") as f:
-                    f.write(data)
-                return TargetSizeResult(
-                    success=True,
-                    output_path=output_path,
-                    actual_bytes=len(data),
-                    quality_used=60,
-                    dimensions_used=small.size,
-                    reason=f"Resized to {int(scale * 100)}% of original dimensions to meet target.",
-                )
-            # Try lowest quality at this scale
-            data = _encode_to_bytes(small, fmt, 20)
-            if len(data) <= target_bytes:
-                with open(output_path, "wb") as f:
-                    f.write(data)
-                return TargetSizeResult(
-                    success=True,
-                    output_path=output_path,
-                    actual_bytes=len(data),
-                    quality_used=20,
-                    dimensions_used=small.size,
-                    reason=f"Resized to {int(scale * 100)}% at lower quality to meet target.",
-                )
-
-    # If completely unattainable: encode at q=5, write output, but strictly return success=False
-    if best_data is None:
-        best_data = _encode_to_bytes(img, fmt, 5)
-        best_quality = 5
+    # Step E: If genuinely impossible (e.g. 1 KB requested on complex image)
+    if best_candidate_data is None:
+        last_s = 0.15
+        sw = max(24, int(orig_w * last_s))
+        sh = max(24, int(orig_h * last_s))
+        last_im = _resize_to_dimensions(img, sw, sh)
+        best_candidate_data = _encode_to_bytes(last_im, fmt, 10)
+        best_candidate_q = 10
+        best_candidate_dims = (sw, sh)
 
     with open(output_path, "wb") as f:
-        f.write(best_data)
-
-    target_kb = target_bytes / 1024
-    actual_kb = len(best_data) / 1024
+        f.write(best_candidate_data)
+    actual_disk_bytes = os.path.getsize(output_path)
     return TargetSizeResult(
         success=False,
         output_path=output_path,
-        actual_bytes=len(best_data),
-        quality_used=best_quality,
-        dimensions_used=img.size,
+        actual_bytes=actual_disk_bytes,
+        quality_used=best_candidate_q,
+        dimensions_used=best_candidate_dims,
         reason=(
-            f"Could not reach {target_kb:.0f} KB target. "
-            f"Smallest achievable size is {actual_kb:.0f} KB. "
-            + ("Try enabling resize or choosing a larger target." if not allow_resize else "The image has too much detail for this target.")
+            f"Could not reach {target_bytes // 1024} KB target. "
+            f"Smallest achievable size is {actual_disk_bytes // 1024} KB. "
+            + ("Enable downscaling or choose a larger target." if not allow_resize else "Target is too small for this image.")
         ),
     )

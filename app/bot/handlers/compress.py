@@ -276,16 +276,25 @@ async def handle_custom_text(
 
         status_msg = await message.answer(PROCESSING_TEXT, parse_mode=ParseMode.HTML)
 
-        out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
+        out_fmt = session.selected_format or session.input_format
+        out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
         output_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
+
+        allow_downscale = (session.exact_width == 0 and session.exact_height == 0)
 
         req = CompressionRequest(
             input_path=session.input_file_path,
             output_path=output_path,
             target_bytes=kb_val * 1024,
-            output_format=session.input_format,
-            allow_resize=True,
-            strip_metadata=True,
+            output_format=session.selected_format,
+            scale_percent=session.scale_percent,
+            exact_width=session.exact_width,
+            exact_height=session.exact_height,
+            max_width=session.max_width,
+            max_height=session.max_height,
+            fit_mode=session.fit_mode,
+            allow_resize=allow_downscale,
+            strip_metadata=session.strip_metadata,
         )
 
         try:
@@ -301,20 +310,15 @@ async def handle_custom_text(
             session.state = "error"
             await status_msg.edit_text(f"❌ Processing error: {e}", parse_mode=ParseMode.HTML)
 
-    # --- Mode: Custom Form Size ---
-    elif session.state == "waiting_form_size_input":
-        num_match = re.search(r"(\d+)", text)
-        if not num_match or int(num_match.group(1)) <= 0:
-            await message.answer("⚠️ Please enter a valid number of KB (e.g. <code>50</code>).", parse_mode=ParseMode.HTML)
-            return
-
-        kb_val = int(num_match.group(1))
-        session.form_max_kb = kb_val
-        session.state = "waiting_choice"
-
-        from app.bot.keyboards.menus import build_form_upload_keyboard
+    # --- Mode: Custom Dimensions (e.g. 800x600) ---
+    dims_match = re.search(r"^(\d{2,5})\s*[x×*]\s*(\d{2,5})$", text)
+    if dims_match:
+        dw, dh = int(dims_match.group(1)), int(dims_match.group(2))
+        session.exact_width = dw
+        session.exact_height = dh
         await message.answer(
-            f"✦ <b>Max Size Set:</b> <code>{kb_val} KB</code>\n\nNext, select required output format:",
+            f"✦ <b>Target Dimensions Set:</b> <code>{dw}×{dh}</code>\n\n"
+            "Now tap <b>⚡ Auto Compress</b> or choose a <b>🎯 Target Size</b>.",
             parse_mode=ParseMode.HTML,
-            reply_markup=build_form_upload_keyboard(session.session_id, stage="format"),
+            reply_markup=build_image_options_keyboard(session.session_id),
         )

@@ -1,9 +1,8 @@
 """
 app/bot/handlers/callbacks.py
 
-All callback query handlers for Kayi Image Compressor.
-Handles FSub verification, preset selection, target-size menus,
-form upload mode, advanced controls, and 1-tap retries.
+Simplified, robust callback query handlers for Kayi Image Compressor.
+Wires Auto Compress, Set Target Size, Advanced Settings, and 1-tap Retries.
 """
 from __future__ import annotations
 
@@ -21,18 +20,13 @@ from app.bot.keyboards.menus import (
     build_help_keyboard,
     build_image_options_keyboard,
     build_target_size_keyboard,
-    build_quality_presets_keyboard,
-    build_specialized_presets_keyboard,
-    build_form_upload_keyboard,
-    build_advanced_controls_keyboard,
+    build_advanced_settings_keyboard,
     build_result_keyboard,
 )
 from app.bot.messages.texts import (
     PROCESSING_TEXT,
     SESSION_EXPIRED_TEXT,
-    QUEUE_BUSY_TEXT,
     HELP_TEXT,
-    WELCOME_TEXT,
 )
 from app.bot.middlewares.fsub import (
     check_channel_membership,
@@ -41,11 +35,40 @@ from app.bot.middlewares.fsub import (
 from app.compression.engine import run_compression_isolated, CompressionResult
 from app.compression.formats import FORMAT_EXTENSIONS
 from app.compression.presets import CompressionRequest, Preset
-from app.services.cleanup import make_temp_path, cleanup_session_files
+from app.services.cleanup import make_temp_path
 from app.services.sessions import SessionStore, UserSession
 
 logger = logging.getLogger(__name__)
 router = Router(name="callbacks")
+
+
+def _format_advanced_text(session: UserSession) -> str:
+    fmt_display = session.selected_format or f"Keep Original ({session.input_format})"
+    preset_names = {
+        "best_quality": "Best Quality",
+        "balanced": "Balanced",
+        "smallest": "Smallest File",
+        "lossless": "Lossless",
+    }
+    preset_display = preset_names.get(session.selected_preset, "Balanced")
+    scale_display = f"{int(session.scale_percent * 100)}%" if session.scale_percent < 0.99 else "Original"
+    meta_display = "Strip EXIF (Private)" if session.strip_metadata else "Preserve EXIF"
+
+    dims_display = "Original"
+    if session.exact_width > 0 and session.exact_height > 0:
+        dims_display = f"Exact {session.exact_width}×{session.exact_height}"
+    elif session.max_width > 0 or session.max_height > 0:
+        dims_display = f"Max {session.max_width or '∞'}×{session.max_height or '∞'}"
+
+    return (
+        "<b>⚙️ Advanced Settings</b>\n\n"
+        f"• <b>Quality Preset:</b> <code>{preset_display}</code>\n"
+        f"• <b>Output Format:</b> <code>{fmt_display}</code>\n"
+        f"• <b>Scaling / Dims:</b> <code>{scale_display} ({dims_display})</code>\n"
+        f"• <b>Metadata:</b> <code>{meta_display}</code>\n\n"
+        "<i>These settings apply to both Auto Compress and Target Size.</i>\n"
+        "<i>Tap any button below to adjust, then tap Back to compress:</i>"
+    )
 
 
 async def _execute_compression_job(
@@ -81,7 +104,6 @@ async def _execute_compression_job(
         session.output_format = res.stats.output_format if res.stats else ""
         session.output_size = res.stats.output_bytes if res.stats else 0
 
-        # Deliver result
         from app.bot.handlers.compress import deliver_compression_result
         try:
             await status_msg.delete()
@@ -160,7 +182,7 @@ async def cb_fsub_verify(callback: CallbackQuery, config: Any, bot: Bot | None =
 
 
 # ==============================================================================
-# NAVIGATION & MENUS
+# NAVIGATION & CANCELLATION
 # ==============================================================================
 
 @router.callback_query(F.data == "compress:start")
@@ -182,7 +204,15 @@ async def cb_back_main(callback: CallbackQuery, sessions: SessionStore) -> None:
         await callback.answer()
         return
 
-    await callback.message.edit_reply_markup(reply_markup=build_image_options_keyboard(session_id))
+    from app.bot.handlers.compress import format_bytes, IMAGE_CARD_TEMPLATE
+    w, h = session.input_dimensions
+    card_text = IMAGE_CARD_TEMPLATE.format(
+        fmt=session.input_format,
+        size=format_bytes(session.input_file_size),
+        dimensions=f"{w}×{h}",
+        suggestion="",
+    )
+    await callback.message.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=build_image_options_keyboard(session_id))
     await callback.answer()
 
 
@@ -195,7 +225,7 @@ async def cb_cancel(callback: CallbackQuery, sessions: SessionStore) -> None:
 
 
 # ==============================================================================
-# AUTO OPTIMIZE
+# PRIMARY OPTION 1: AUTO COMPRESS
 # ==============================================================================
 
 @router.callback_query(F.data.startswith("comp:auto:"))
@@ -207,26 +237,38 @@ async def cb_auto(callback: CallbackQuery, sessions: SessionStore, config: Any) 
         await callback.answer()
         return
 
-    session.last_mode = "preset"
-    session.last_preset = Preset.BALANCED.value
-    session.last_quality = 75
+    session.last_mode = "auto"
+    session.last_preset = session.selected_preset
 
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
+    out_fmt = session.selected_format or session.input_format
+    out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
     out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
+
+    preset_enum = Preset(session.selected_preset)
+    is_lossless = (session.selected_preset == "lossless")
+    allow_resize = (session.scale_percent < 0.99 or session.exact_width > 0 or session.max_width > 0)
 
     req = CompressionRequest(
         input_path=session.input_file_path,
         output_path=out_path,
-        preset=Preset.BALANCED,
-        output_format=session.input_format,
-        strip_metadata=True,
+        preset=preset_enum,
+        output_format=session.selected_format,
+        scale_percent=session.scale_percent,
+        exact_width=session.exact_width,
+        exact_height=session.exact_height,
+        max_width=session.max_width,
+        max_height=session.max_height,
+        fit_mode=session.fit_mode,
+        strip_metadata=session.strip_metadata,
+        lossless=is_lossless,
+        allow_resize=allow_resize,
     )
     await callback.answer()
     await _execute_compression_job(callback, session, sessions, req, config)
 
 
 # ==============================================================================
-# TARGET SIZE MENUS & ACTIONS
+# PRIMARY OPTION 2: SET TARGET SIZE
 # ==============================================================================
 
 @router.callback_query(F.data.startswith("comp:menu_target:"))
@@ -238,7 +280,11 @@ async def cb_menu_target(callback: CallbackQuery, sessions: SessionStore) -> Non
         await callback.answer()
         return
 
-    await callback.message.edit_reply_markup(reply_markup=build_target_size_keyboard(session_id))
+    text = (
+        "<b>🎯 Set Target File Size</b>\n\n"
+        "Choose a target file size. Quality and proportional scaling will be automatically calibrated:"
+    )
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_target_size_keyboard(session_id))
     await callback.answer()
 
 
@@ -258,7 +304,7 @@ async def cb_target_preset(callback: CallbackQuery, sessions: SessionStore, conf
         session.state = "waiting_target_input"
         await callback.message.edit_text(
             "<b>Enter Custom Target Size</b>\n\n"
-            "Send the desired file size in KB or MB (e.g. <code>50 KB</code> or <code>1.5 MB</code>):",
+            "Send your desired file size in KB or MB (e.g. <code>40 KB</code> or <code>1.5 MB</code>):",
             parse_mode=ParseMode.HTML,
         )
         await callback.answer()
@@ -268,209 +314,33 @@ async def cb_target_preset(callback: CallbackQuery, sessions: SessionStore, conf
     session.last_mode = "target"
     session.last_target_kb = kb_val
 
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
+    out_fmt = session.selected_format or session.input_format
+    out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
     out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
+
+    # Proportional downscaling allowed by default in Target Size unless dimensions are explicitly locked
+    allow_downscale = (session.exact_width == 0 and session.exact_height == 0)
 
     req = CompressionRequest(
         input_path=session.input_file_path,
         output_path=out_path,
         target_bytes=kb_val * 1024,
-        output_format=session.input_format,
-        allow_resize=True,
-        strip_metadata=True,
+        output_format=session.selected_format,
+        scale_percent=session.scale_percent,
+        exact_width=session.exact_width,
+        exact_height=session.exact_height,
+        max_width=session.max_width,
+        max_height=session.max_height,
+        fit_mode=session.fit_mode,
+        allow_resize=allow_downscale,
+        strip_metadata=session.strip_metadata,
     )
     await callback.answer()
     await _execute_compression_job(callback, session, sessions, req, config)
 
 
 # ==============================================================================
-# QUALITY & SPECIALIZED PRESETS
-# ==============================================================================
-
-@router.callback_query(F.data.startswith("comp:menu_presets:"))
-async def cb_menu_presets(callback: CallbackQuery, sessions: SessionStore) -> None:
-    session_id = callback.data.split(":", 2)[2]
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    await callback.message.edit_reply_markup(reply_markup=build_quality_presets_keyboard(session_id))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("comp:menu_spec:"))
-async def cb_menu_spec(callback: CallbackQuery, sessions: SessionStore) -> None:
-    session_id = callback.data.split(":", 2)[2]
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    await callback.message.edit_reply_markup(reply_markup=build_specialized_presets_keyboard(session_id))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("comp:preset:"))
-async def cb_preset_select(callback: CallbackQuery, sessions: SessionStore, config: Any) -> None:
-    parts = callback.data.split(":")
-    preset_name = parts[2]
-    session_id = parts[3]
-
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    preset = Preset(preset_name)
-    session.last_mode = "preset"
-    session.last_preset = preset_name
-
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
-    out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
-
-    req = CompressionRequest(
-        input_path=session.input_file_path,
-        output_path=out_path,
-        preset=preset,
-        output_format=session.input_format,
-        strip_metadata=True,
-    )
-    await callback.answer()
-    await _execute_compression_job(callback, session, sessions, req, config)
-
-
-# ==============================================================================
-# FORM UPLOAD MODE (FLAGSHIP GUIDED WORKFLOW)
-# ==============================================================================
-
-@router.callback_query(F.data.startswith("comp:menu_form:"))
-async def cb_menu_form(callback: CallbackQuery, sessions: SessionStore) -> None:
-    session_id = callback.data.split(":", 2)[2]
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    text = (
-        "<b>📋 Form Upload Mode — Step 1/3</b>\n\n"
-        "Select maximum required file size allowed by the portal:"
-    )
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_form_upload_keyboard(session_id, stage="size"))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("form:size:"))
-async def cb_form_size(callback: CallbackQuery, sessions: SessionStore) -> None:
-    parts = callback.data.split(":")
-    size_str = parts[2]
-    session_id = parts[3]
-
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    if size_str == "custom":
-        session.state = "waiting_form_size_input"
-        await callback.message.edit_text("<b>Enter Portal Max Size (KB):</b>", parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    session.form_max_kb = int(size_str)
-    text = (
-        f"<b>📋 Form Upload Mode — Step 2/3</b>\n\n"
-        f"• <b>Max Size:</b> <code>{session.form_max_kb} KB</code>\n\n"
-        "Select required output format:"
-    )
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_form_upload_keyboard(session_id, stage="format"))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("form:fmt:"))
-async def cb_form_fmt(callback: CallbackQuery, sessions: SessionStore) -> None:
-    parts = callback.data.split(":")
-    fmt_str = parts[2]
-    session_id = parts[3]
-
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    session.form_format = "" if fmt_str == "KEEP" else fmt_str
-    fmt_display = session.form_format or f"Keep ({session.input_format})"
-
-    text = (
-        f"<b>📋 Form Upload Mode — Step 3/3</b>\n\n"
-        f"• <b>Max Size:</b> <code>{session.form_max_kb} KB</code>\n"
-        f"• <b>Format:</b> <code>{fmt_display}</code>\n\n"
-        "Select framing preference (never distorts or stretches):"
-    )
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_form_upload_keyboard(session_id, stage="fit"))
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("form:fit:"))
-async def cb_form_fit(callback: CallbackQuery, sessions: SessionStore, config: Any) -> None:
-    parts = callback.data.split(":")
-    fit_choice = parts[2]
-    session_id = parts[3]
-
-    session = sessions.get(session_id)
-    if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
-        return
-
-    exact_w, exact_h = 0, 0
-    fit_mode = "fit"
-
-    if fit_choice == "pad_sq":
-        exact_w, exact_h = 600, 600
-        fit_mode = "pad"
-    elif fit_choice == "crop_sq":
-        exact_w, exact_h = 600, 600
-        fit_mode = "crop"
-    elif fit_choice == "pad_pass":
-        exact_w, exact_h = 600, 800
-        fit_mode = "pad"
-    elif fit_choice == "crop_pass":
-        exact_w, exact_h = 600, 800
-        fit_mode = "crop"
-
-    session.last_mode = "form"
-    target_bytes = (session.form_max_kb or 100) * 1024
-    session.last_target_kb = session.form_max_kb
-
-    out_ext = FORMAT_EXTENSIONS.get(session.form_format or session.input_format, "jpg")
-    out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
-
-    req = CompressionRequest(
-        input_path=session.input_file_path,
-        output_path=out_path,
-        target_bytes=target_bytes,
-        output_format=session.form_format or session.input_format,
-        exact_width=exact_w,
-        exact_height=exact_h,
-        fit_mode=fit_mode,
-        allow_resize=True,
-        is_form_mode=True,
-        form_max_bytes=target_bytes,
-        strip_metadata=True,
-    )
-    await callback.answer()
-    await _execute_compression_job(callback, session, sessions, req, config)
-
-
-# ==============================================================================
-# ADVANCED CONTROLS
+# PRIMARY OPTION 3: ADVANCED SETTINGS
 # ==============================================================================
 
 @router.callback_query(F.data.startswith("comp:menu_adv:"))
@@ -482,90 +352,77 @@ async def cb_menu_adv(callback: CallbackQuery, sessions: SessionStore) -> None:
         await callback.answer()
         return
 
-    text = "<b>⚙️ Advanced Image Controls</b>\n\nApply custom scaling, format conversions, or EXIF preferences:"
-    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_controls_keyboard(session_id))
+    text = _format_advanced_text(session)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_settings_keyboard(session))
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("adv:scale:"))
-async def cb_adv_scale(callback: CallbackQuery, sessions: SessionStore, config: Any) -> None:
+@router.callback_query(F.data.startswith("adv:preset:"))
+async def cb_adv_preset(callback: CallbackQuery, sessions: SessionStore) -> None:
     parts = callback.data.split(":")
-    scale_int = int(parts[2])
+    preset_name = parts[2]
     session_id = parts[3]
 
     session = sessions.get(session_id)
     if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
+        await callback.answer("Session expired.", show_alert=True)
         return
 
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
-    out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
-
-    req = CompressionRequest(
-        input_path=session.input_file_path,
-        output_path=out_path,
-        preset=Preset.BALANCED,
-        output_format=session.input_format,
-        scale_percent=scale_int / 100.0,
-        strip_metadata=True,
-    )
-    await callback.answer(f"Scaling to {scale_int}%...")
-    await _execute_compression_job(callback, session, sessions, req, config)
+    session.selected_preset = preset_name
+    text = _format_advanced_text(session)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_settings_keyboard(session))
+    await callback.answer("Preset updated")
 
 
 @router.callback_query(F.data.startswith("adv:fmt:"))
-async def cb_adv_fmt(callback: CallbackQuery, sessions: SessionStore, config: Any) -> None:
+async def cb_adv_fmt(callback: CallbackQuery, sessions: SessionStore) -> None:
     parts = callback.data.split(":")
     fmt_target = parts[2]
     session_id = parts[3]
 
     session = sessions.get(session_id)
     if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
+        await callback.answer("Session expired.", show_alert=True)
         return
 
-    out_ext = FORMAT_EXTENSIONS.get(fmt_target, "jpg")
-    out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
+    session.selected_format = "" if fmt_target == "ORIGINAL" else fmt_target
+    text = _format_advanced_text(session)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_settings_keyboard(session))
+    await callback.answer("Format updated")
 
-    req = CompressionRequest(
-        input_path=session.input_file_path,
-        output_path=out_path,
-        preset=Preset.BALANCED,
-        output_format=fmt_target,
-        strip_metadata=True,
-    )
-    await callback.answer(f"Converting to {fmt_target}...")
-    await _execute_compression_job(callback, session, sessions, req, config)
+
+@router.callback_query(F.data.startswith("adv:scale:"))
+async def cb_adv_scale(callback: CallbackQuery, sessions: SessionStore) -> None:
+    parts = callback.data.split(":")
+    scale_int = int(parts[2])
+    session_id = parts[3]
+
+    session = sessions.get(session_id)
+    if not session or not os.path.exists(session.input_file_path):
+        await callback.answer("Session expired.", show_alert=True)
+        return
+
+    session.scale_percent = scale_int / 100.0
+    text = _format_advanced_text(session)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_settings_keyboard(session))
+    await callback.answer(f"Scale set to {scale_int}%")
 
 
 @router.callback_query(F.data.startswith("adv:meta:"))
-async def cb_adv_meta(callback: CallbackQuery, sessions: SessionStore, config: Any) -> None:
+async def cb_adv_meta(callback: CallbackQuery, sessions: SessionStore) -> None:
     parts = callback.data.split(":")
     meta_mode = parts[2]
     session_id = parts[3]
 
     session = sessions.get(session_id)
     if not session or not os.path.exists(session.input_file_path):
-        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
-        await callback.answer()
+        await callback.answer("Session expired.", show_alert=True)
         return
 
-    strip_meta = (meta_mode == "strip")
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
-    out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
-
-    req = CompressionRequest(
-        input_path=session.input_file_path,
-        output_path=out_path,
-        preset=Preset.BALANCED,
-        output_format=session.input_format,
-        strip_metadata=strip_meta,
-    )
-    action_text = "Stripping metadata..." if strip_meta else "Preserving metadata..."
-    await callback.answer(action_text)
-    await _execute_compression_job(callback, session, sessions, req, config)
+    session.strip_metadata = (meta_mode == "strip")
+    text = _format_advanced_text(session)
+    await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_settings_keyboard(session))
+    await callback.answer("Metadata preference updated")
 
 
 # ==============================================================================
@@ -580,7 +437,8 @@ async def cb_retry_smaller(callback: CallbackQuery, sessions: SessionStore, conf
         await callback.answer("Session expired. Please send image again.", show_alert=True)
         return
 
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
+    out_fmt = session.selected_format or session.input_format
+    out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
     out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
 
     if session.last_mode == "target" and session.last_target_kb:
@@ -590,18 +448,18 @@ async def cb_retry_smaller(callback: CallbackQuery, sessions: SessionStore, conf
             input_path=session.input_file_path,
             output_path=out_path,
             target_bytes=new_target * 1024,
-            output_format=session.input_format,
+            output_format=session.selected_format,
             allow_resize=True,
-            strip_metadata=True,
+            strip_metadata=session.strip_metadata,
         )
     else:
         req = CompressionRequest(
             input_path=session.input_file_path,
             output_path=out_path,
             preset=Preset.SMALLEST,
-            output_format=session.input_format,
+            output_format=session.selected_format,
             allow_resize=True,
-            strip_metadata=True,
+            strip_metadata=session.strip_metadata,
         )
 
     await callback.answer("Optimizing for smaller size...")
@@ -616,7 +474,8 @@ async def cb_retry_better(callback: CallbackQuery, sessions: SessionStore, confi
         await callback.answer("Session expired. Please send image again.", show_alert=True)
         return
 
-    out_ext = FORMAT_EXTENSIONS.get(session.input_format, "jpg")
+    out_fmt = session.selected_format or session.input_format
+    out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
     out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
 
     if session.last_mode == "target" and session.last_target_kb:
@@ -626,18 +485,18 @@ async def cb_retry_better(callback: CallbackQuery, sessions: SessionStore, confi
             input_path=session.input_file_path,
             output_path=out_path,
             target_bytes=new_target * 1024,
-            output_format=session.input_format,
+            output_format=session.selected_format,
             allow_resize=False,
-            strip_metadata=True,
+            strip_metadata=session.strip_metadata,
         )
     else:
         req = CompressionRequest(
             input_path=session.input_file_path,
             output_path=out_path,
             preset=Preset.BEST_QUALITY,
-            output_format=session.input_format,
+            output_format=session.selected_format,
             allow_resize=False,
-            strip_metadata=True,
+            strip_metadata=session.strip_metadata,
         )
 
     await callback.answer("Optimizing for higher quality...")
@@ -652,9 +511,10 @@ async def cb_retry_settings(callback: CallbackQuery, sessions: SessionStore) -> 
         await callback.answer("Session expired. Please send image again.", show_alert=True)
         return
 
+    text = _format_advanced_text(session)
     await callback.message.answer(
-        "<b>Compression Settings</b>\n\nChoose new settings for your active image:",
+        text=text,
         parse_mode=ParseMode.HTML,
-        reply_markup=build_image_options_keyboard(session_id),
+        reply_markup=build_advanced_settings_keyboard(session),
     )
     await callback.answer()

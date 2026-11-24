@@ -1,19 +1,23 @@
 """
 app/bot/keyboards/menus.py
 
-All keyboard builder functions for Kayi Image Compressor.
+Simplified, elegant keyboard builders for Kayi Image Compressor.
 Matches the official visual standards and button styling of the Kayi Bots ecosystem.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+if TYPE_CHECKING:
+    from app.services.sessions import UserSession
 
 
 def build_welcome_keyboard(
     channel_url: str = "https://t.me/KayiBots",
     developer_url: str = "https://t.me/qouba",
 ) -> InlineKeyboardMarkup:
-    """Builds the official /start keyboard without redundant Help buttons."""
+    """Builds the official /start keyboard."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🗜 Compress an Image", callback_data="compress:start", style="success")
@@ -35,28 +39,37 @@ def build_help_keyboard(developer_url: str = "https://t.me/qouba") -> InlineKeyb
 
 
 def build_image_options_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Main compression choices for an uploaded image."""
+    """
+    Primary post-upload compression options:
+    - Auto Compress
+    - Set Target Size
+    - Advanced Settings
+    - Cancel
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="⚡ Auto Optimize", callback_data=f"comp:auto:{session_id}", style="primary")
+            InlineKeyboardButton(text="⚡ Auto Compress", callback_data=f"comp:auto:{session_id}")
         ],
         [
-            InlineKeyboardButton(text="🎯 Target Size", callback_data=f"comp:menu_target:{session_id}"),
-            InlineKeyboardButton(text="📋 Form Upload Mode", callback_data=f"comp:menu_form:{session_id}"),
+            InlineKeyboardButton(text="🎯 Set Target Size", callback_data=f"comp:menu_target:{session_id}")
         ],
         [
-            InlineKeyboardButton(text="🎚 Quality Presets", callback_data=f"comp:menu_presets:{session_id}"),
-            InlineKeyboardButton(text="🎨 Specialized Modes", callback_data=f"comp:menu_spec:{session_id}"),
+            InlineKeyboardButton(text="⚙️ Advanced Settings", callback_data=f"comp:menu_adv:{session_id}")
         ],
         [
-            InlineKeyboardButton(text="⚙️ Advanced Controls", callback_data=f"comp:menu_adv:{session_id}"),
-            InlineKeyboardButton(text="❌ Cancel", callback_data=f"comp:cancel:{session_id}", style="danger"),
+            InlineKeyboardButton(text="❌ Cancel", callback_data=f"comp:cancel:{session_id}")
         ]
     ])
 
 
 def build_target_size_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Target size presets strictly matching Row 1: 20|50|100, Row 2: 200|500|1MB."""
+    """
+    Target size presets:
+    Row 1: 20 KB | 50 KB | 100 KB
+    Row 2: 200 KB | 500 KB | 1 MB
+    Row 3: Custom Size
+    Row 4: Back
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="20 KB", callback_data=f"comp:target:20:{session_id}"),
@@ -77,134 +90,64 @@ def build_target_size_keyboard(session_id: str) -> InlineKeyboardMarkup:
     ])
 
 
-def build_quality_presets_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Quality preset options."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="⭐ Best Quality", callback_data=f"comp:preset:best_quality:{session_id}"),
-            InlineKeyboardButton(text="⚖️ Balanced", callback_data=f"comp:preset:balanced:{session_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="📦 Smallest File", callback_data=f"comp:preset:smallest:{session_id}"),
-            InlineKeyboardButton(text="💎 Lossless", callback_data=f"comp:preset:lossless:{session_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{session_id}"),
-        ]
-    ])
+def build_advanced_settings_keyboard(session: "UserSession") -> InlineKeyboardMarkup:
+    """
+    Advanced Settings dashboard:
+    Quality preset, output format, dimension downscaling, and metadata stripping.
+    Applies consistently to both Auto Compress and Target Size.
+    """
+    sid = session.session_id
+    p = session.selected_preset
+    f = session.selected_format
+    s = session.scale_percent
+    m = session.strip_metadata
 
-
-def build_specialized_presets_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Specialized modes for photos, text, signatures, forms, and transparent files."""
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📸 Photo Mode", callback_data=f"comp:preset:photo:{session_id}"),
-            InlineKeyboardButton(text="🖥️ Screenshot & Text", callback_data=f"comp:preset:screenshot:{session_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="✍️ Signature Mode", callback_data=f"comp:preset:signature:{session_id}"),
-            InlineKeyboardButton(text="🪪 Form Photo Mode", callback_data=f"comp:preset:form_photo:{session_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="✨ Transparent Mode", callback_data=f"comp:preset:transparent:{session_id}"),
-        ],
-        [
-            InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{session_id}"),
-        ]
-    ])
-
-
-def build_form_upload_keyboard(session_id: str, stage: str = "size") -> InlineKeyboardMarkup:
-    """Guided workflow for portal form upload constraints."""
-    if stage == "size":
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Max 20 KB", callback_data=f"form:size:20:{session_id}"),
-                InlineKeyboardButton(text="Max 50 KB", callback_data=f"form:size:50:{session_id}"),
-                InlineKeyboardButton(text="Max 100 KB", callback_data=f"form:size:100:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Max 200 KB", callback_data=f"form:size:200:{session_id}"),
-                InlineKeyboardButton(text="Max 500 KB", callback_data=f"form:size:500:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Custom Size…", callback_data=f"form:size:custom:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{session_id}"),
-            ]
-        ])
-
-    elif stage == "format":
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="JPEG / JPG", callback_data=f"form:fmt:JPEG:{session_id}"),
-                InlineKeyboardButton(text="PNG", callback_data=f"form:fmt:PNG:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="WebP", callback_data=f"form:fmt:WEBP:{session_id}"),
-                InlineKeyboardButton(text="Keep Original", callback_data=f"form:fmt:KEEP:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="‹ Back", callback_data=f"comp:menu_form:{session_id}"),
-            ]
-        ])
-
-    elif stage == "fit":
-        return InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Keep Aspect Ratio", callback_data=f"form:fit:fit:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Square 1:1 (Pad White)", callback_data=f"form:fit:pad_sq:{session_id}"),
-                InlineKeyboardButton(text="Square 1:1 (Crop)", callback_data=f"form:fit:crop_sq:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="Passport 3:4 (Pad)", callback_data=f"form:fit:pad_pass:{session_id}"),
-                InlineKeyboardButton(text="Passport 3:4 (Crop)", callback_data=f"form:fit:crop_pass:{session_id}"),
-            ],
-            [
-                InlineKeyboardButton(text="‹ Back", callback_data=f"comp:menu_form:{session_id}"),
-            ]
-        ])
+    def mark(cond: bool, text: str) -> str:
+        return f"✓ {text}" if cond else text
 
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{session_id}")]
-    ])
-
-
-def build_advanced_controls_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Advanced controls: percentage scaling, dimensions, and metadata."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+        # Row 1: Quality Preset
         [
-            InlineKeyboardButton(text="Scale 75%", callback_data=f"adv:scale:75:{session_id}"),
-            InlineKeyboardButton(text="Scale 50%", callback_data=f"adv:scale:50:{session_id}"),
-            InlineKeyboardButton(text="Scale 25%", callback_data=f"adv:scale:25:{session_id}"),
+            InlineKeyboardButton(text=mark(p == "best_quality", "⭐ Best"), callback_data=f"adv:preset:best_quality:{sid}"),
+            InlineKeyboardButton(text=mark(p == "balanced", "⚖️ Balanced"), callback_data=f"adv:preset:balanced:{sid}"),
+            InlineKeyboardButton(text=mark(p == "smallest", "📦 Smallest"), callback_data=f"adv:preset:smallest:{sid}"),
+            InlineKeyboardButton(text=mark(p == "lossless", "💎 Lossless"), callback_data=f"adv:preset:lossless:{sid}"),
         ],
+        # Row 2: Format Selection
         [
-            InlineKeyboardButton(text="Format: to JPEG", callback_data=f"adv:fmt:JPEG:{session_id}"),
-            InlineKeyboardButton(text="Format: to PNG", callback_data=f"adv:fmt:PNG:{session_id}"),
-            InlineKeyboardButton(text="Format: to WebP", callback_data=f"adv:fmt:WEBP:{session_id}"),
+            InlineKeyboardButton(text=mark(f == "", "Original"), callback_data=f"adv:fmt:ORIGINAL:{sid}"),
+            InlineKeyboardButton(text=mark(f == "JPEG", "JPEG"), callback_data=f"adv:fmt:JPEG:{sid}"),
+            InlineKeyboardButton(text=mark(f == "PNG", "PNG"), callback_data=f"adv:fmt:PNG:{sid}"),
+            InlineKeyboardButton(text=mark(f == "WEBP", "WebP"), callback_data=f"adv:fmt:WEBP:{sid}"),
         ],
+        # Row 3: Scaling
         [
-            InlineKeyboardButton(text="Preserve EXIF", callback_data=f"adv:meta:keep:{session_id}"),
-            InlineKeyboardButton(text="Strip EXIF (Default)", callback_data=f"adv:meta:strip:{session_id}"),
+            InlineKeyboardButton(text=mark(s >= 0.99, "100%"), callback_data=f"adv:scale:100:{sid}"),
+            InlineKeyboardButton(text=mark(0.70 <= s <= 0.80, "75%"), callback_data=f"adv:scale:75:{sid}"),
+            InlineKeyboardButton(text=mark(0.45 <= s <= 0.55, "50%"), callback_data=f"adv:scale:50:{sid}"),
+            InlineKeyboardButton(text=mark(0.20 <= s <= 0.30, "25%"), callback_data=f"adv:scale:25:{sid}"),
         ],
+        # Row 4: Metadata
         [
-            InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{session_id}"),
+            InlineKeyboardButton(text=mark(m, "Strip EXIF"), callback_data=f"adv:meta:strip:{sid}"),
+            InlineKeyboardButton(text=mark(not m, "Preserve EXIF"), callback_data=f"adv:meta:keep:{sid}"),
+        ],
+        # Row 5: Back
+        [
+            InlineKeyboardButton(text="‹ Back to Options", callback_data=f"comp:back_main:{sid}"),
         ]
     ])
 
 
 def build_result_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Result action buttons: 1-tap retries, setting change, and compress another."""
+    """Result action buttons: 1-tap retries, advanced settings, and compress another."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📉 Smaller Size", callback_data=f"retry:smaller:{session_id}"),
             InlineKeyboardButton(text="📈 Better Quality", callback_data=f"retry:better:{session_id}"),
         ],
         [
-            InlineKeyboardButton(text="⚙️ Change Settings", callback_data=f"retry:settings:{session_id}"),
+            InlineKeyboardButton(text="⚙️ Advanced Settings", callback_data=f"comp:menu_adv:{session_id}"),
             InlineKeyboardButton(text="🗜 Compress Another", callback_data="compress:start", style="success"),
         ]
     ])
