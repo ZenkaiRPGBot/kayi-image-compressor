@@ -46,6 +46,8 @@ services:
         value: "-1004495645007"
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PYTHONPATH
+        value: "."
       - key: RENDER_EMAIL
         sync: false
       - key: RENDER_SERVICE_NAME
