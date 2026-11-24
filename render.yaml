@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: kayi-image-compressor
+    env: python
+    plan: free
+    region: frankfurt
+    autoDeploy: true
+    buildCommand: pip install --no-cache-dir -r requirements.txt
+    startCommand: python -u app/main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12"
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_BASE_URL
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: PORT
+        value: "10000"
+      - key: FSUB_ENABLED
+        value: "false"
+      - key: FSUB_CHANNEL
+        value: "@KayiBots"
+      - key: FSUB_CHANNEL_URL
+        value: "https://t.me/KayiBots"
+      - key: MAX_UPLOAD_MB
+        value: "8"
+      - key: MAX_IMAGE_PIXELS
+        value: "12000000"
+      - key: MAX_QUEUE_SIZE
+        value: "5"
+      - key: MAX_CONCURRENT_JOBS
+        value: "1"
+      - key: PROCESSING_TIMEOUT_SECONDS
+        value: "25"
+      - key: DAILY_USER_LIMIT
+        value: "20"
+      - key: SESSION_TTL_SECONDS
+        value: "600"
+      - key: LOG_LEVEL
+        value: "INFO"
