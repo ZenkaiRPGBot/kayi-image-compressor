@@ -155,5 +155,6 @@ Sessions expire after 10 minutes of inactivity and are not persisted across rest
 
 ## Links
 
+- **Bot:** [@KayiImgShrinkBot](https://t.me/KayiImgShrinkBot)
 - **Channel:** [@KayiBots](https://t.me/KayiBots)
 - **Developer:** [@qouba](https://t.me/qouba)
