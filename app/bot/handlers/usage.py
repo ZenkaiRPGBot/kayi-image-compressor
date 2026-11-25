@@ -2,17 +2,16 @@
 app/bot/handlers/usage.py
 
 Handles /usage, /render, and /ping commands.
-Tracks Render Free Tier hours (750h limit), RAM consumption, uptime,
-Telegram gateway latency, and active compression sessions.
-Matches the official standard established across the Kayi Bots ecosystem.
+Collects on-demand process, storage, and Render hosting metrics
+matching the official Kayi Bots ecosystem standard.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any
 
 import psutil
 from aiogram import Router, F, Bot
@@ -29,6 +28,7 @@ from aiogram.types import (
 )
 
 from app.config import Config
+from app.services.cleanup import get_temp_storage_usage
 from app.services.sessions import SessionStore
 
 logger = logging.getLogger(__name__)
@@ -71,10 +71,16 @@ def get_uptime_string() -> str:
 
 def get_process_memory_mb() -> float:
     try:
-        process = psutil.Process()
-        return process.memory_info().rss / (1024.0 * 1024.0)
+        return psutil.Process().memory_info().rss / (1024.0 * 1024.0)
     except Exception:
-        return 32.0
+        return 0.0
+
+
+def get_process_cpu_percent() -> float:
+    try:
+        return psutil.Process().cpu_percent(interval=0.05)
+    except Exception:
+        return 0.0
 
 
 async def measure_gateway_latency(bot: Bot) -> float:
@@ -92,37 +98,50 @@ async def build_usage_card_text(
     now = datetime.now(timezone.utc)
     uptime_str = get_uptime_string()
 
+    # Render Monthly Free Instance Hours (750h cap)
     session_hours = (now - BOT_START_TIME).total_seconds() / 3600.0
     total_used_hours = min(750.0, config.render_used_hours + session_hours)
     remaining_hours = max(0.0, 750.0 - total_used_hours)
     used_pct = min(100.0, (total_used_hours / 750.0) * 100.0)
     days_left_capacity = remaining_hours / 24.0
 
+    # Process-level metrics (on-demand)
+    cpu_pct = get_process_cpu_percent()
     mem_mb = get_process_memory_mb()
     mem_pct = min(100.0, (mem_mb / 512.0) * 100.0)
+    temp_bytes, temp_files = get_temp_storage_usage()
+    temp_mb = temp_bytes / (1024.0 * 1024.0)
+    max_storage_mb = config.max_storage_budget_bytes / (1024.0 * 1024.0)
+
     ping_ms = await measure_gateway_latency(bot)
 
+    active_jobs = sessions.active_jobs_count()
     active_sessions = sessions.count()
+    queued_jobs = max(0, sum(1 for s in sessions._sessions.values() if s.state == "processing") - active_jobs)
+    max_mp = config.max_image_pixels / 1_000_000
 
     email_display = config.render_email if config.render_email else "Not Set"
 
     text = (
         "<b>Kayi Image Compressor — Host & Service Metrics</b>\n\n"
-        "<b>Host & Cloud Account:</b>\n"
+        "<b>Render Instance & Account:</b>\n"
         "• <b>Cloud:</b> Render (Frankfurt, EU-Central)\n"
         f"• <b>Account Email:</b> <code>{html.escape(email_display)}</code>\n"
         f"• <b>Service Name:</b> <code>{html.escape(config.render_service_name)}</code>\n"
-        f"• <b>Repository:</b> <code>{html.escape(config.render_repo)}</code>\n\n"
-        "<b>Monthly Free Usage (Render Limit: 750h):</b>\n"
-        f"• <b>Active Uptime:</b> <code>{uptime_str}</code>\n"
-        f"• <b>Hours This Month:</b> <code>{total_used_hours:.1f}h / 750h ({used_pct:.1f}%)</code>\n"
-        f"• <b>Remaining Free:</b> <code>{remaining_hours:.1f}h (~{days_left_capacity:.1f} days)</code>\n"
-        f"• <b>Memory (RAM):</b> <code>{mem_mb:.1f} MB / 512 MB ({mem_pct:.1f}%)</code>\n\n"
-        "<b>Compression Engine Stats:</b>\n"
+        f"• <b>Repository:</b> <code>{html.escape(config.render_repo)}</code>\n"
+        f"• <b>Bot Uptime:</b> <code>{uptime_str}</code>\n"
+        f"• <b>Monthly Hours (750h):</b> <code>{total_used_hours:.1f}h / 750h ({used_pct:.1f}%)</code>\n"
+        f"• <b>Remaining Free:</b> <code>{remaining_hours:.1f}h (~{days_left_capacity:.1f} days)</code>\n\n"
+        "<b>Process Resources (On-Demand):</b>\n"
+        f"• <b>Process CPU:</b> <code>{cpu_pct:.1f}%</code>\n"
+        f"• <b>Process RAM:</b> <code>{mem_mb:.1f} MB / 512 MB ({mem_pct:.1f}%)</code>\n"
+        f"• <b>Temp Storage:</b> <code>{temp_mb:.2f} MB / {max_storage_mb:.0f} MB ({temp_files} files)</code>\n\n"
+        "<b>Compression Engine & Limits:</b>\n"
+        f"• <b>Active Jobs:</b> <code>{active_jobs} / {config.max_concurrent_jobs}</code>\n"
+        f"• <b>Queued Jobs:</b> <code>{queued_jobs} / {config.max_queue_size}</code>\n"
         f"• <b>Active Sessions:</b> <code>{active_sessions}</code>\n"
-        f"• <b>Max File Budget:</b> <code>{config.max_upload_bytes // (1024 * 1024)} MB</code>\n"
-        f"• <b>Daily User Limit:</b> <code>{config.daily_user_limit} images/day</code>\n"
-        f"• <b>Telegram Gateway Ping:</b> <code>{ping_ms:.1f} ms</code>"
+        f"• <b>Upload / Pixel Cap:</b> <code>{config.max_upload_bytes // (1024 * 1024)} MB / {max_mp:.0f} MP</code>\n"
+        f"• <b>Telegram API Ping:</b> <code>{ping_ms:.1f} ms</code>"
     )
 
     markup = InlineKeyboardMarkup(
@@ -137,13 +156,33 @@ async def build_usage_card_text(
     return text, markup
 
 
+def _build_ping_message(bot_ms: float, api_ms: float) -> tuple[str, InlineKeyboardMarkup]:
+    uptime = get_uptime_string()
+    text = (
+        "<b>Pong!</b> ⚡\n\n"
+        f"<b>Bot Responsiveness:</b> <code>{bot_ms:.2f} ms</code>\n"
+        f"<b>Telegram API Latency:</b> <code>{api_ms:.1f} ms</code>\n\n"
+        f"<b>Uptime:</b> <code>{uptime}</code>"
+    )
+    markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 Check Ping", callback_data="ping:refresh", style="primary"
+                )
+            ]
+        ]
+    )
+    return text, markup
+
+
 @router.message(Command("usage"))
 @router.message(Command("render"))
 async def cmd_usage(
     message: Message, bot: Bot, config: Config, sessions: SessionStore
 ) -> None:
-    # Restrict to owner if OWNER_ID is configured
     if config.owner_id and message.from_user and message.from_user.id != config.owner_id:
+        await message.reply("Access restricted to bot owner.")
         return
 
     text, markup = await build_usage_card_text(bot, config, sessions)
@@ -155,7 +194,7 @@ async def cb_usage_refresh(
     callback: CallbackQuery, bot: Bot, config: Config, sessions: SessionStore
 ) -> None:
     if config.owner_id and callback.from_user and callback.from_user.id != config.owner_id:
-        await callback.answer("Owner only.", show_alert=True)
+        await callback.answer("Access restricted to bot owner.", show_alert=True)
         return
 
     text, markup = await build_usage_card_text(bot, config, sessions)
@@ -170,57 +209,28 @@ async def cb_usage_refresh(
 
 @router.message(Command("ping"))
 async def cmd_ping(message: Message, bot: Bot) -> None:
-    t0 = time.perf_counter()
-    ping_msg = await message.answer("🏓 <i>Pinging...</i>", parse_mode=ParseMode.HTML)
-    latency_ms = (time.perf_counter() - t0) * 1000.0
-    uptime = get_uptime_string()
+    t_start = time.perf_counter()
+    api_ms = await measure_gateway_latency(bot)
+    bot_ms = max(0.01, (time.perf_counter() - t_start) * 1000.0 - api_ms)
 
-    text = (
-        "<b>Kayi Image Compressor — Status</b>\n\n"
-        f"• <b>Gateway Latency:</b> <code>{latency_ms:.1f} ms</code>\n"
-        f"• <b>Uptime:</b> <code>{uptime}</code>\n"
-        "• <b>Service Status:</b> <code>Operational ✅</code>"
-    )
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔄 Check Ping", callback_data="ping:refresh", style="primary"
-                )
-            ]
-        ]
-    )
-    await ping_msg.edit_text(text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
+    text, markup = _build_ping_message(bot_ms, api_ms)
+    await message.reply(text=text, parse_mode=ParseMode.HTML, reply_markup=markup)
 
 
 @router.callback_query(F.data == "ping:refresh")
 async def cb_ping_refresh(callback: CallbackQuery, bot: Bot) -> None:
-    t0 = time.perf_counter()
-    latency_ms = await measure_gateway_latency(bot)
-    uptime = get_uptime_string()
+    t_start = time.perf_counter()
+    api_ms = await measure_gateway_latency(bot)
+    bot_ms = max(0.01, (time.perf_counter() - t_start) * 1000.0 - api_ms)
 
-    text = (
-        "<b>Kayi Image Compressor — Status</b>\n\n"
-        f"• <b>Gateway Latency:</b> <code>{latency_ms:.1f} ms</code>\n"
-        f"• <b>Uptime:</b> <code>{uptime}</code>\n"
-        "• <b>Service Status:</b> <code>Operational ✅</code>"
-    )
-    markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔄 Check Ping", callback_data="ping:refresh", style="primary"
-                )
-            ]
-        ]
-    )
+    text, markup = _build_ping_message(bot_ms, api_ms)
     try:
         await callback.message.edit_text(
             text=text, parse_mode=ParseMode.HTML, reply_markup=markup
         )
     except Exception:
         pass
-    await callback.answer()
+    await callback.answer("Ping refreshed")
 
 
 async def register_bot_commands(bot: Bot, config: Config) -> None:
@@ -246,7 +256,7 @@ async def register_bot_commands(bot: Bot, config: Config) -> None:
                     scope=BotCommandScopeChat(chat_id=config.owner_id),
                 )
             except Exception as e:
-                logger.debug("Could not register owner commands: %s", e)
-        logger.info("Bot commands successfully registered with Telegram.")
+                logger.warning("Could not register owner commands for %s: %s", config.owner_id, e)
+        logger.info("Bot commands registered with Telegram (/start, /help, /compress, /privacy, /ping, /usage).")
     except Exception as e:
         logger.warning("Could not register default bot commands: %s", e)

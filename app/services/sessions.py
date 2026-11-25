@@ -124,6 +124,10 @@ class SessionStore:
     def count(self) -> int:
         return len(self._sessions)
 
+    def active_jobs_count(self) -> int:
+        """Return count of currently in-flight compression jobs."""
+        return sum(1 for s in self._sessions.values() if s.in_flight)
+
     def get_by_user(self, user_id: int) -> Optional[UserSession]:
         """Return the most recent active session for a user."""
         candidates = [

@@ -116,9 +116,11 @@ async def test_cmd_usage_owner_restriction() -> None:
     # Non-owner message
     non_owner_msg = MagicMock()
     non_owner_msg.from_user.id = 11111111
+    non_owner_msg.reply = AsyncMock()
     non_owner_msg.answer = AsyncMock()
 
     await cmd_usage(non_owner_msg, bot, config, sessions)
+    non_owner_msg.reply.assert_called_once_with("Access restricted to bot owner.")
     non_owner_msg.answer.assert_not_called()
 
     # Owner message
@@ -136,13 +138,15 @@ async def test_cmd_ping() -> None:
     bot.get_me = AsyncMock()
 
     msg = MagicMock()
-    ping_response = MagicMock()
-    ping_response.edit_text = AsyncMock()
-    msg.answer = AsyncMock(return_value=ping_response)
+    msg.reply = AsyncMock()
 
     await cmd_ping(msg, bot)
-    msg.answer.assert_called_once()
-    ping_response.edit_text.assert_called_once()
+    msg.reply.assert_called_once()
+    call_kwargs = msg.reply.call_args[1]
+    assert "Pong!" in call_kwargs["text"]
+    assert "Bot Responsiveness" in call_kwargs["text"]
+    assert "Telegram API Latency" in call_kwargs["text"]
+    assert call_kwargs["reply_markup"].inline_keyboard[0][0].model_dump(exclude_none=True)["style"] == "primary"
 
 
 @pytest.mark.asyncio

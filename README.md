@@ -111,6 +111,18 @@ python scripts/benchmark.py
 | `/help` | Compression guide and instructions |
 | `/compress` | Compression hint (send image directly) |
 | `/privacy` | Privacy and data handling policy |
+| `/ping` | Check bot responsiveness, Telegram API latency, and uptime |
+| `/usage` | Host, process CPU/RAM/storage, and Render 750h usage (Owner) |
+
+---
+
+## Kayi Bots Shared Baseline Standards
+
+Mandatory baseline requirements for all Kayi Bots:
+- **Commands:** `/start`, `/help`, `/ping`, `/usage` (owner-restricted)
+- **Onboarding & FSub:** Cinematic welcome video, mandatory `@KayiBots` subscription, `/start help` deep-link support
+- **UI & Branding:** Consistent HTML formatting, `✦` bullet points, meaningful native colored buttons (`primary`, `success`, `danger`), official channel & `@qouba` attribution
+- **Hosting:** Render Free tier resource compatibility (512 MB RAM, 0.1 CPU, bounded storage & workers)
 
 ---
 

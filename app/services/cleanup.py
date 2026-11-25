@@ -49,6 +49,24 @@ def cleanup_orphaned_files(max_age_seconds: int = 3600) -> int:
     return removed
 
 
+def get_temp_storage_usage() -> tuple[int, int]:
+    """
+    On-demand calculation of current temporary storage used by kayicomp_* files.
+    Returns (total_bytes, file_count).
+    """
+    tmp_dir = tempfile.gettempdir()
+    pattern = os.path.join(tmp_dir, f"{TEMP_PREFIX}*")
+    total_size = 0
+    count = 0
+    for path in glob.glob(pattern):
+        try:
+            total_size += os.path.getsize(path)
+            count += 1
+        except OSError:
+            pass
+    return total_size, count
+
+
 def enforce_storage_budget(max_bytes: int = 50 * 1024 * 1024) -> int:
     """
     Enforce global disk storage budget for temporary files.
