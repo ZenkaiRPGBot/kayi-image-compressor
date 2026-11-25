@@ -19,7 +19,7 @@ services:
       - key: PORT
         value: "10000"
       - key: FSUB_ENABLED
-        value: "false"
+        value: "true"
       - key: FSUB_CHANNEL
         value: "@KayiBots"
       - key: FSUB_CHANNEL_URL

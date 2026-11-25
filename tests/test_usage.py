@@ -133,6 +133,67 @@ async def test_cmd_usage_owner_restriction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_usage_fail_closed_when_owner_id_unset() -> None:
+    from dataclasses import replace
+    from app.bot.handlers.usage import cb_usage_refresh, is_owner
+
+    bot = MagicMock()
+    bot.get_me = AsyncMock()
+    sessions = SessionStore()
+    config = replace(
+        Config(
+            bot_token="123:ABC",
+            webhook_base_url="https://test.onrender.com",
+            webhook_secret="secret",
+            port=10000,
+            bot_username="KayiImgShrinkBot",
+            fsub_enabled=False,
+            fsub_channel="@KayiBots",
+            fsub_channel_url="https://t.me/KayiBots",
+            welcome_video_file_id="",
+            max_upload_bytes=8 * 1024 * 1024,
+            max_image_pixels=12_000_000,
+            max_queue_size=5,
+            max_concurrent_jobs=1,
+            processing_timeout_seconds=25,
+            daily_user_limit=20,
+            session_ttl_seconds=600,
+            max_storage_budget_bytes=50 * 1024 * 1024,
+            fsub_cache_ttl=45,
+            fsub_timeout=5.0,
+            log_level="INFO",
+            owner_id=0,
+            log_channel_id=0,
+            render_email="",
+            render_service_name="",
+            render_repo="",
+            render_used_hours=0.0,
+        )
+    )
+
+    assert is_owner(None, config) is False
+    assert is_owner(11111111, config) is False
+    assert is_owner(0, config) is False
+
+    msg = MagicMock()
+    msg.from_user.id = 11111111
+    msg.reply = AsyncMock()
+    msg.answer = AsyncMock()
+    await cmd_usage(msg, bot, config, sessions)
+    msg.reply.assert_awaited_once_with("Access restricted to bot owner.")
+    msg.answer.assert_not_called()
+
+    cb = MagicMock()
+    cb.from_user.id = 11111111
+    cb.answer = AsyncMock()
+    cb.message = MagicMock()
+    cb.message.edit_text = AsyncMock()
+    await cb_usage_refresh(cb, bot, config, sessions)
+    cb.answer.assert_awaited_once_with("Access restricted to bot owner.", show_alert=True)
+    cb.message.edit_text.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_cmd_ping() -> None:
     bot = MagicMock()
     bot.get_me = AsyncMock()

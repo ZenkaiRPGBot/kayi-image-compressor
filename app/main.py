@@ -31,6 +31,7 @@ from aiohttp import web
 
 from app.config import load_config
 from app.services.cleanup import cleanup_orphaned_files
+from app.services.restart_notify import build_restart_notifier
 from app.services.sessions import SessionStore
 from app.services.rate_limits import RateLimiter
 from app.services.queue import JobQueue
@@ -125,12 +126,14 @@ async def main() -> None:
     await site.start()
 
     cleanup_task = asyncio.create_task(session_cleanup_task())
+    restart_task = asyncio.create_task(build_restart_notifier(bot, config).notify_once())
     logger.info("Server running on port %d. Ready.", config.port)
 
     try:
         await asyncio.Event().wait()  # Run forever
     finally:
         cleanup_task.cancel()
+        restart_task.cancel()
         await bot.delete_webhook()
         await bot.session.close()
         await runner.cleanup()

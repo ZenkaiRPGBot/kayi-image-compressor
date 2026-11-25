@@ -43,3 +43,42 @@ class TestDeepLinkHelp:
         get_and_clear_pending_start_param(user_id=user_id)
         # Second retrieval must return empty
         assert get_and_clear_pending_start_param(user_id=user_id) == ""
+
+    @pytest.mark.asyncio
+    async def test_plain_help_command_saved_when_blocked_by_fsub(self):
+        """A plain /help blocked by FSub saves 'help' so joining shows Help."""
+        from unittest.mock import AsyncMock, MagicMock
+        from aiogram.types import Message
+        from app.bot.middlewares.fsub import FSubMiddleware, cache
+
+        user_id = 5505
+        cache.invalidate(user_id)
+
+        bot = MagicMock()
+        member = MagicMock()
+        member.status = "left"
+        bot.get_chat_member = AsyncMock(return_value=member)
+
+        config = MagicMock(
+            fsub_enabled=True,
+            fsub_channel="@KayiBots",
+            fsub_channel_url="https://t.me/KayiBots",
+            fsub_cache_ttl=45,
+            fsub_timeout=5.0,
+            owner_id=986380678,
+        )
+
+        user = MagicMock(id=user_id, username="tester", first_name="Test")
+        message = MagicMock(spec=Message)
+        message.from_user = user
+        message.chat = MagicMock(type="private")
+        message.text = "/help"
+        message.answer = AsyncMock()
+
+        handler = AsyncMock()
+        middleware = FSubMiddleware(config)
+        await middleware(handler, message, {"bot": bot, "event_from_user": user})
+
+        handler.assert_not_called()
+        message.answer.assert_awaited_once()
+        assert get_and_clear_pending_start_param(user_id=user_id) == "help"

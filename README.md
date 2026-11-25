@@ -133,7 +133,7 @@ app/
 ├── main.py              # Entry point: webhook server + startup
 ├── config.py            # Env-based configuration
 ├── bot/
-│   ├── handlers/        # /start, /help, image upload, callbacks
+│   ├── handlers/        # /start, /help, /ping, /usage, image upload, callbacks
 │   ├── keyboards/       # Inline keyboard builders
 │   ├── messages/        # All message text constants
 │   └── middlewares/     # FSub + rate limit
@@ -149,11 +149,18 @@ app/
 │   ├── sessions.py      # In-memory session store with TTL
 │   ├── rate_limits.py   # Per-user daily/cooldown limits
 │   ├── queue.py         # Bounded asyncio job queue
-│   └── cleanup.py       # Temp file cleanup
+│   ├── cleanup.py       # Temp file cleanup
+│   └── restart_notify.py # Startup / restart notifications to owner & log channel
 └── web/
     ├── webhook.py       # aiohttp webhook handler
     └── health.py        # GET /health endpoint
 ```
+
+---
+
+## Startup Notifications
+
+On startup, `restart_notify.py` sends a one-shot HTML status notice (`Kayi Image Compressor Online 🟢`) with IST timestamp and recent changelog (from an optional local `restart_reason.txt` or `git log -1`) to `OWNER_ID` and `LOG_CHANNEL_ID`, deduplicated per `RENDER_GIT_COMMIT`.
 
 ---
 

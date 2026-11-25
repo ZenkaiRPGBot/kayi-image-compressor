@@ -214,7 +214,10 @@ class FSubMiddleware(BaseMiddleware):
             msg_text = getattr(event, "text", None)
             if msg_text:
                 parts = str(msg_text).strip().split(maxsplit=1)
-                if len(parts) > 1 and parts[0].lower().startswith("/start") and parts[1].strip().lower() == "help":
+                cmd = parts[0].lower().split("@", 1)[0]
+                if cmd == "/start" and len(parts) > 1 and parts[1].strip().lower() == "help":
+                    set_pending_start_param(user.id, "help")
+                elif cmd == "/help":
                     set_pending_start_param(user.id, "help")
 
             await event.answer(

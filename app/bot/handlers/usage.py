@@ -51,6 +51,11 @@ def mask_email(email_str: str) -> str:
     return f"{masked_user}@{domain_part}"
 
 
+def is_owner(user_id: int | None, config: Config) -> bool:
+    """Fail-closed owner authorization check."""
+    return bool(config.owner_id and user_id and user_id == config.owner_id)
+
+
 def get_uptime_string() -> str:
     now = datetime.now(timezone.utc)
     uptime_sec = int((now - BOT_START_TIME).total_seconds())
@@ -181,7 +186,8 @@ def _build_ping_message(bot_ms: float, api_ms: float) -> tuple[str, InlineKeyboa
 async def cmd_usage(
     message: Message, bot: Bot, config: Config, sessions: SessionStore
 ) -> None:
-    if config.owner_id and message.from_user and message.from_user.id != config.owner_id:
+    user_id = message.from_user.id if message.from_user else None
+    if not is_owner(user_id, config):
         await message.reply("Access restricted to bot owner.")
         return
 
@@ -193,7 +199,8 @@ async def cmd_usage(
 async def cb_usage_refresh(
     callback: CallbackQuery, bot: Bot, config: Config, sessions: SessionStore
 ) -> None:
-    if config.owner_id and callback.from_user and callback.from_user.id != config.owner_id:
+    user_id = callback.from_user.id if callback.from_user else None
+    if not is_owner(user_id, config):
         await callback.answer("Access restricted to bot owner.", show_alert=True)
         return
 
