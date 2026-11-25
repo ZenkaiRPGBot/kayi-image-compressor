@@ -129,7 +129,7 @@ async def build_usage_card_text(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔄 Refresh Metrics", callback_data="usage:refresh"
+                    text="🔄 Refresh Metrics", callback_data="usage:refresh", style="primary"
                 )
             ]
         ]
@@ -185,7 +185,7 @@ async def cmd_ping(message: Message, bot: Bot) -> None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔄 Check Ping", callback_data="ping:refresh"
+                    text="🔄 Check Ping", callback_data="ping:refresh", style="primary"
                 )
             ]
         ]
@@ -209,7 +209,7 @@ async def cb_ping_refresh(callback: CallbackQuery, bot: Bot) -> None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🔄 Check Ping", callback_data="ping:refresh"
+                    text="🔄 Check Ping", callback_data="ping:refresh", style="primary"
                 )
             ]
         ]

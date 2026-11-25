@@ -57,6 +57,7 @@ class UserSession:
     selected_format: str = ""           # "" = keep original, or "JPEG", "PNG", "WEBP"
     selected_preset: str = "balanced"   # "best_quality", "balanced", "smallest", "lossless"
     strip_metadata: bool = True
+    dimension_mode: str = "auto"        # "auto", "100", "75", "50", "25", "custom"
     scale_percent: float = 1.0          # 1.0 = 100%, 0.75 = 75%, etc.
     exact_width: int = 0
     exact_height: int = 0

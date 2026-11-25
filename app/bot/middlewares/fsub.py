@@ -57,6 +57,7 @@ def build_fsub_keyboard(channel_url: str = "https://t.me/KayiBots", channel_name
             InlineKeyboardButton(
                 text=f"📢 Join {channel_name}",
                 url=channel_url,
+                style="primary",
             )
         ],
         [

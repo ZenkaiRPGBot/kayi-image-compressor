@@ -87,8 +87,8 @@ async def deliver_compression_result(
         err_text = "\n".join(f"• {e}" for e in result.form_validation_errors)
         caption += f"\n" + FORM_VALIDATION_FAILED.format(errors=err_text)
 
-    # Keyboard with 1-tap retries
-    markup = build_result_keyboard(session.session_id)
+    # Keyboard with 1-tap retries (passes success flag so failed targets don't show green success)
+    markup = build_result_keyboard(session.session_id, success=result.success)
 
     # Deliver document
     input_file = FSInputFile(result.output_path, filename=os.path.basename(result.output_path))
@@ -280,7 +280,7 @@ async def handle_custom_text(
         out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
         output_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
 
-        allow_downscale = (session.exact_width == 0 and session.exact_height == 0)
+        allow_downscale = (session.dimension_mode == "auto")
 
         req = CompressionRequest(
             input_path=session.input_file_path,
@@ -310,15 +310,37 @@ async def handle_custom_text(
             session.state = "error"
             await status_msg.edit_text(f"❌ Processing error: {e}", parse_mode=ParseMode.HTML)
 
-    # --- Mode: Custom Dimensions (e.g. 800x600) ---
+    # --- Mode: Custom Dimensions (e.g. 800x600 or max 1200x1200) ---
+    max_match = re.search(r"^max\s+(\d{2,5})\s*[x×*]\s*(\d{2,5})$", text)
     dims_match = re.search(r"^(\d{2,5})\s*[x×*]\s*(\d{2,5})$", text)
-    if dims_match:
-        dw, dh = int(dims_match.group(1)), int(dims_match.group(2))
-        session.exact_width = dw
-        session.exact_height = dh
+    if max_match or dims_match:
+        session.dimension_mode = "custom"
+        session.scale_percent = 1.0
+        session.state = "waiting_choice"
+        if max_match:
+            mw, mh = int(max_match.group(1)), int(max_match.group(2))
+            session.max_width = mw
+            session.max_height = mh
+            session.exact_width = 0
+            session.exact_height = 0
+        else:
+            dw, dh = int(dims_match.group(1)), int(dims_match.group(2))
+            session.exact_width = dw
+            session.exact_height = dh
+            session.max_width = 0
+            session.max_height = 0
+
+        from app.bot.handlers.callbacks import _format_advanced_text
+        from app.bot.keyboards.menus import build_advanced_settings_keyboard
         await message.answer(
-            f"✦ <b>Target Dimensions Set:</b> <code>{dw}×{dh}</code>\n\n"
-            "Now tap <b>⚡ Auto Compress</b> or choose a <b>🎯 Target Size</b>.",
+            text=_format_advanced_text(session),
             parse_mode=ParseMode.HTML,
-            reply_markup=build_image_options_keyboard(session.session_id),
+            reply_markup=build_advanced_settings_keyboard(session),
+        )
+    elif session.state == "waiting_dims_input":
+        from app.bot.keyboards.menus import build_back_keyboard
+        await message.answer(
+            "⚠️ Invalid format. Send exact dimensions (e.g. <code>800x600</code>) or maximum bounds (e.g. <code>max 1200x1200</code>).",
+            parse_mode=ParseMode.HTML,
+            reply_markup=build_back_keyboard(f"comp:menu_adv:{session.session_id}"),
         )

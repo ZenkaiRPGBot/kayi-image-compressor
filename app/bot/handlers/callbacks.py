@@ -18,6 +18,7 @@ from aiogram.types import CallbackQuery
 from app.bot.keyboards.menus import (
     build_welcome_keyboard,
     build_help_keyboard,
+    build_back_keyboard,
     build_image_options_keyboard,
     build_target_size_keyboard,
     build_advanced_settings_keyboard,
@@ -51,23 +52,28 @@ def _format_advanced_text(session: UserSession) -> str:
         "lossless": "Lossless",
     }
     preset_display = preset_names.get(session.selected_preset, "Balanced")
-    scale_display = f"{int(session.scale_percent * 100)}%" if session.scale_percent < 0.99 else "Original"
-    meta_display = "Strip EXIF (Private)" if session.strip_metadata else "Preserve EXIF"
+    meta_display = "Remove EXIF (Private)" if session.strip_metadata else "Preserve EXIF"
 
-    dims_display = "Original"
-    if session.exact_width > 0 and session.exact_height > 0:
+    if session.dimension_mode == "auto":
+        dims_display = "Automatic (Adaptive)"
+    elif session.dimension_mode == "100":
+        dims_display = "100% (Original)"
+    elif session.dimension_mode in ("75", "50", "25"):
+        dims_display = f"{session.dimension_mode}% Scale"
+    elif session.exact_width > 0 and session.exact_height > 0:
         dims_display = f"Exact {session.exact_width}×{session.exact_height}"
     elif session.max_width > 0 or session.max_height > 0:
         dims_display = f"Max {session.max_width or '∞'}×{session.max_height or '∞'}"
+    else:
+        dims_display = "Custom"
 
     return (
         "<b>⚙️ Advanced Settings</b>\n\n"
-        f"• <b>Quality Preset:</b> <code>{preset_display}</code>\n"
-        f"• <b>Output Format:</b> <code>{fmt_display}</code>\n"
-        f"• <b>Scaling / Dims:</b> <code>{scale_display} ({dims_display})</code>\n"
+        f"• <b>Quality:</b> <code>{preset_display}</code>\n"
+        f"• <b>Format:</b> <code>{fmt_display}</code>\n"
+        f"• <b>Dimensions:</b> <code>{dims_display}</code>\n"
         f"• <b>Metadata:</b> <code>{meta_display}</code>\n\n"
-        "<i>These settings apply to both Auto Compress and Target Size.</i>\n"
-        "<i>Tap any button below to adjust, then tap Back to compress:</i>"
+        "<i>Tap any option to toggle. Tap Apply Settings when ready:</i>"
     )
 
 
@@ -306,6 +312,7 @@ async def cb_target_preset(callback: CallbackQuery, sessions: SessionStore, conf
             "<b>Enter Custom Target Size</b>\n\n"
             "Send your desired file size in KB or MB (e.g. <code>40 KB</code> or <code>1.5 MB</code>):",
             parse_mode=ParseMode.HTML,
+            reply_markup=build_back_keyboard(f"comp:menu_target:{session_id}"),
         )
         await callback.answer()
         return
@@ -318,8 +325,8 @@ async def cb_target_preset(callback: CallbackQuery, sessions: SessionStore, conf
     out_ext = FORMAT_EXTENSIONS.get(out_fmt, "jpg")
     out_path = make_temp_path(out_ext, config.max_storage_budget_bytes)
 
-    # Proportional downscaling allowed by default in Target Size unless dimensions are explicitly locked
-    allow_downscale = (session.exact_width == 0 and session.exact_height == 0)
+    # Automatic dimensions permits adaptive resizing; explicit dimensions lock resizing
+    allow_downscale = (session.dimension_mode == "auto")
 
     req = CompressionRequest(
         input_path=session.input_file_path,
@@ -391,10 +398,10 @@ async def cb_adv_fmt(callback: CallbackQuery, sessions: SessionStore) -> None:
     await callback.answer("Format updated")
 
 
-@router.callback_query(F.data.startswith("adv:scale:"))
-async def cb_adv_scale(callback: CallbackQuery, sessions: SessionStore) -> None:
+@router.callback_query(F.data.startswith("adv:dim:"))
+async def cb_adv_dim(callback: CallbackQuery, sessions: SessionStore) -> None:
     parts = callback.data.split(":")
-    scale_int = int(parts[2])
+    dim_mode = parts[2]
     session_id = parts[3]
 
     session = sessions.get(session_id)
@@ -402,10 +409,48 @@ async def cb_adv_scale(callback: CallbackQuery, sessions: SessionStore) -> None:
         await callback.answer("Session expired.", show_alert=True)
         return
 
-    session.scale_percent = scale_int / 100.0
+    if dim_mode == "custom":
+        session.state = "waiting_dims_input"
+        await callback.message.edit_text(
+            "<b>Enter Custom Dimensions</b>\n\n"
+            "Send exact dimensions (e.g. <code>800x600</code>) or maximum bounds (e.g. <code>max 1200x1200</code>):",
+            parse_mode=ParseMode.HTML,
+            reply_markup=build_back_keyboard(f"comp:menu_adv:{session_id}"),
+        )
+        await callback.answer()
+        return
+
+    session.dimension_mode = dim_mode
+    session.exact_width = 0
+    session.exact_height = 0
+    session.max_width = 0
+    session.max_height = 0
+    session.scale_percent = 1.0 if dim_mode in ("auto", "100") else (int(dim_mode) / 100.0)
+
     text = _format_advanced_text(session)
     await callback.message.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=build_advanced_settings_keyboard(session))
-    await callback.answer(f"Scale set to {scale_int}%")
+    await callback.answer("Dimensions updated")
+
+
+@router.callback_query(F.data.startswith("adv:apply:"))
+async def cb_adv_apply(callback: CallbackQuery, sessions: SessionStore) -> None:
+    session_id = callback.data.split(":", 2)[2]
+    session = sessions.get(session_id)
+    if not session or not os.path.exists(session.input_file_path):
+        await callback.message.edit_text(SESSION_EXPIRED_TEXT, parse_mode=ParseMode.HTML)
+        await callback.answer()
+        return
+
+    from app.bot.handlers.compress import format_bytes, IMAGE_CARD_TEMPLATE
+    w, h = session.input_dimensions
+    card_text = IMAGE_CARD_TEMPLATE.format(
+        fmt=session.input_format,
+        size=format_bytes(session.input_file_size),
+        dimensions=f"{w}×{h}",
+        suggestion="",
+    )
+    await callback.message.edit_text(card_text, parse_mode=ParseMode.HTML, reply_markup=build_image_options_keyboard(session_id))
+    await callback.answer("Settings applied!")
 
 
 @router.callback_query(F.data.startswith("adv:meta:"))

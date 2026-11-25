@@ -1,16 +1,31 @@
 """
 app/bot/keyboards/menus.py
 
-Simplified, elegant keyboard builders for Kayi Image Compressor.
-Matches the official visual standards and button styling of the Kayi Bots ecosystem.
+Native colored inline keyboard builders for Kayi Image Compressor.
+Follows the official Telegram Bot API `style` property ("primary", "success", "danger")
+and the Kayi Bots ecosystem visual design system.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 if TYPE_CHECKING:
     from app.services.sessions import UserSession
+
+
+def _opt_btn(selected: bool, label: str, callback_data: str) -> InlineKeyboardButton:
+    """Helper for dynamic selection highlighting in Advanced Settings."""
+    if selected:
+        return InlineKeyboardButton(
+            text=f"✓ {label}",
+            callback_data=callback_data,
+            style="primary",
+        )
+    return InlineKeyboardButton(
+        text=label,
+        callback_data=callback_data,
+    )
 
 
 def build_welcome_keyboard(
@@ -23,7 +38,7 @@ def build_welcome_keyboard(
             InlineKeyboardButton(text="🗜 Compress an Image", callback_data="compress:start", style="success")
         ],
         [
-            InlineKeyboardButton(text="📢 Updates", url=channel_url),
+            InlineKeyboardButton(text="📢 Updates", url=channel_url, style="primary"),
             InlineKeyboardButton(text="👨‍💻 Developer", url=developer_url),
         ]
     ])
@@ -38,26 +53,35 @@ def build_help_keyboard(developer_url: str = "https://t.me/qouba") -> InlineKeyb
     ])
 
 
+def build_back_keyboard(callback_data: str) -> InlineKeyboardMarkup:
+    """Builds a clean single-button Back navigation keyboard."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="‹ Back", callback_data=callback_data)
+        ]
+    ])
+
+
 def build_image_options_keyboard(session_id: str) -> InlineKeyboardMarkup:
     """
-    Primary post-upload compression options:
-    - Auto Compress
-    - Set Target Size
-    - Advanced Settings
-    - Cancel
+    Primary post-upload menu:
+    Row 1: Auto Compress — success
+    Row 2: Set Target Size — primary
+    Row 3: Advanced Settings — primary
+    Row 4: Cancel — danger
     """
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="⚡ Auto Compress", callback_data=f"comp:auto:{session_id}")
+            InlineKeyboardButton(text="⚡ Auto Compress", callback_data=f"comp:auto:{session_id}", style="success")
         ],
         [
-            InlineKeyboardButton(text="🎯 Set Target Size", callback_data=f"comp:menu_target:{session_id}")
+            InlineKeyboardButton(text="🎯 Set Target Size", callback_data=f"comp:menu_target:{session_id}", style="primary")
         ],
         [
-            InlineKeyboardButton(text="⚙️ Advanced Settings", callback_data=f"comp:menu_adv:{session_id}")
+            InlineKeyboardButton(text="⚙️ Advanced Settings", callback_data=f"comp:menu_adv:{session_id}", style="primary")
         ],
         [
-            InlineKeyboardButton(text="❌ Cancel", callback_data=f"comp:cancel:{session_id}")
+            InlineKeyboardButton(text="Cancel", callback_data=f"comp:cancel:{session_id}", style="danger")
         ]
     ])
 
@@ -65,24 +89,24 @@ def build_image_options_keyboard(session_id: str) -> InlineKeyboardMarkup:
 def build_target_size_keyboard(session_id: str) -> InlineKeyboardMarkup:
     """
     Target size presets:
-    Row 1: 20 KB | 50 KB | 100 KB
-    Row 2: 200 KB | 500 KB | 1 MB
-    Row 3: Custom Size
-    Row 4: Back
+    Row 1: 20 KB | 50 KB | 100 KB — success
+    Row 2: 200 KB | 500 KB | 1 MB — success
+    Row 3: Custom Size — primary
+    Row 4: Back — default
     """
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="20 KB", callback_data=f"comp:target:20:{session_id}"),
-            InlineKeyboardButton(text="50 KB", callback_data=f"comp:target:50:{session_id}"),
-            InlineKeyboardButton(text="100 KB", callback_data=f"comp:target:100:{session_id}"),
+            InlineKeyboardButton(text="20 KB", callback_data=f"comp:target:20:{session_id}", style="success"),
+            InlineKeyboardButton(text="50 KB", callback_data=f"comp:target:50:{session_id}", style="success"),
+            InlineKeyboardButton(text="100 KB", callback_data=f"comp:target:100:{session_id}", style="success"),
         ],
         [
-            InlineKeyboardButton(text="200 KB", callback_data=f"comp:target:200:{session_id}"),
-            InlineKeyboardButton(text="500 KB", callback_data=f"comp:target:500:{session_id}"),
-            InlineKeyboardButton(text="1 MB", callback_data=f"comp:target:1024:{session_id}"),
+            InlineKeyboardButton(text="200 KB", callback_data=f"comp:target:200:{session_id}", style="success"),
+            InlineKeyboardButton(text="500 KB", callback_data=f"comp:target:500:{session_id}", style="success"),
+            InlineKeyboardButton(text="1 MB", callback_data=f"comp:target:1024:{session_id}", style="success"),
         ],
         [
-            InlineKeyboardButton(text="✏️ Custom Size", callback_data=f"comp:target:custom:{session_id}"),
+            InlineKeyboardButton(text="✏️ Custom Size", callback_data=f"comp:target:custom:{session_id}", style="primary"),
         ],
         [
             InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{session_id}"),
@@ -92,62 +116,90 @@ def build_target_size_keyboard(session_id: str) -> InlineKeyboardMarkup:
 
 def build_advanced_settings_keyboard(session: "UserSession") -> InlineKeyboardMarkup:
     """
-    Advanced Settings dashboard:
-    Quality preset, output format, dimension downscaling, and metadata stripping.
-    Applies consistently to both Auto Compress and Target Size.
+    Advanced Settings dashboard with dynamic selection highlighting.
+    Selected: style="primary" + "✓ " prefix.
+    Unselected: default style, no checkmark.
+    Two buttons per row for mobile clarity.
     """
     sid = session.session_id
     p = session.selected_preset
     f = session.selected_format
-    s = session.scale_percent
+    d = session.dimension_mode
     m = session.strip_metadata
 
-    def mark(cond: bool, text: str) -> str:
-        return f"✓ {text}" if cond else text
-
     return InlineKeyboardMarkup(inline_keyboard=[
-        # Row 1: Quality Preset
+        # Quality
         [
-            InlineKeyboardButton(text=mark(p == "best_quality", "⭐ Best"), callback_data=f"adv:preset:best_quality:{sid}"),
-            InlineKeyboardButton(text=mark(p == "balanced", "⚖️ Balanced"), callback_data=f"adv:preset:balanced:{sid}"),
-            InlineKeyboardButton(text=mark(p == "smallest", "📦 Smallest"), callback_data=f"adv:preset:smallest:{sid}"),
-            InlineKeyboardButton(text=mark(p == "lossless", "💎 Lossless"), callback_data=f"adv:preset:lossless:{sid}"),
+            _opt_btn(p == "best_quality", "Best", f"adv:preset:best_quality:{sid}"),
+            _opt_btn(p == "balanced", "Balanced", f"adv:preset:balanced:{sid}"),
         ],
-        # Row 2: Format Selection
         [
-            InlineKeyboardButton(text=mark(f == "", "Original"), callback_data=f"adv:fmt:ORIGINAL:{sid}"),
-            InlineKeyboardButton(text=mark(f == "JPEG", "JPEG"), callback_data=f"adv:fmt:JPEG:{sid}"),
-            InlineKeyboardButton(text=mark(f == "PNG", "PNG"), callback_data=f"adv:fmt:PNG:{sid}"),
-            InlineKeyboardButton(text=mark(f == "WEBP", "WebP"), callback_data=f"adv:fmt:WEBP:{sid}"),
+            _opt_btn(p == "smallest", "Smallest", f"adv:preset:smallest:{sid}"),
+            _opt_btn(p == "lossless", "Lossless", f"adv:preset:lossless:{sid}"),
         ],
-        # Row 3: Scaling
+        # Format
         [
-            InlineKeyboardButton(text=mark(s >= 0.99, "100%"), callback_data=f"adv:scale:100:{sid}"),
-            InlineKeyboardButton(text=mark(0.70 <= s <= 0.80, "75%"), callback_data=f"adv:scale:75:{sid}"),
-            InlineKeyboardButton(text=mark(0.45 <= s <= 0.55, "50%"), callback_data=f"adv:scale:50:{sid}"),
-            InlineKeyboardButton(text=mark(0.20 <= s <= 0.30, "25%"), callback_data=f"adv:scale:25:{sid}"),
+            _opt_btn(f == "", "Original", f"adv:fmt:ORIGINAL:{sid}"),
+            _opt_btn(f == "JPEG", "JPEG", f"adv:fmt:JPEG:{sid}"),
         ],
-        # Row 4: Metadata
         [
-            InlineKeyboardButton(text=mark(m, "Strip EXIF"), callback_data=f"adv:meta:strip:{sid}"),
-            InlineKeyboardButton(text=mark(not m, "Preserve EXIF"), callback_data=f"adv:meta:keep:{sid}"),
+            _opt_btn(f == "PNG", "PNG", f"adv:fmt:PNG:{sid}"),
+            _opt_btn(f == "WEBP", "WebP", f"adv:fmt:WEBP:{sid}"),
         ],
-        # Row 5: Back
+        # Dimensions
         [
-            InlineKeyboardButton(text="‹ Back to Options", callback_data=f"comp:back_main:{sid}"),
+            _opt_btn(d == "auto", "Automatic", f"adv:dim:auto:{sid}"),
+            _opt_btn(d == "100", "100%", f"adv:dim:100:{sid}"),
+        ],
+        [
+            _opt_btn(d == "75", "75%", f"adv:dim:75:{sid}"),
+            _opt_btn(d == "50", "50%", f"adv:dim:50:{sid}"),
+        ],
+        [
+            _opt_btn(d == "25", "25%", f"adv:dim:25:{sid}"),
+            _opt_btn(d == "custom", "Custom", f"adv:dim:custom:{sid}"),
+        ],
+        # Metadata
+        [
+            _opt_btn(m, "Remove", f"adv:meta:strip:{sid}"),
+            _opt_btn(not m, "Preserve", f"adv:meta:keep:{sid}"),
+        ],
+        # Actions
+        [
+            InlineKeyboardButton(text="Apply Settings", callback_data=f"adv:apply:{sid}", style="success"),
+        ],
+        [
+            InlineKeyboardButton(text="‹ Back", callback_data=f"comp:back_main:{sid}"),
         ]
     ])
 
 
-def build_result_keyboard(session_id: str) -> InlineKeyboardMarkup:
-    """Result action buttons: 1-tap retries, advanced settings, and compress another."""
+def build_result_keyboard(session_id: str, success: bool = True) -> InlineKeyboardMarkup:
+    """
+    Result action buttons:
+    - If success: Smaller Size / Better Quality (primary), Change Settings (default), Compress Another (success)
+    - If unsuccessful: Retry actions in primary style, no green success styling
+    """
+    if not success:
+        return InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📉 Try Smaller Target", callback_data=f"retry:smaller:{session_id}", style="primary"),
+                InlineKeyboardButton(text="⚙️ Change Settings", callback_data=f"comp:menu_adv:{session_id}", style="primary"),
+            ],
+            [
+                InlineKeyboardButton(text="🗜 Compress Another", callback_data="compress:start"),
+            ]
+        ])
+
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📉 Smaller Size", callback_data=f"retry:smaller:{session_id}"),
-            InlineKeyboardButton(text="📈 Better Quality", callback_data=f"retry:better:{session_id}"),
+            InlineKeyboardButton(text="📉 Smaller Size", callback_data=f"retry:smaller:{session_id}", style="primary"),
+            InlineKeyboardButton(text="📈 Better Quality", callback_data=f"retry:better:{session_id}", style="primary"),
         ],
         [
-            InlineKeyboardButton(text="⚙️ Advanced Settings", callback_data=f"comp:menu_adv:{session_id}"),
+            InlineKeyboardButton(text="⚙️ Change Settings", callback_data=f"comp:menu_adv:{session_id}"),
+        ],
+        [
             InlineKeyboardButton(text="🗜 Compress Another", callback_data="compress:start", style="success"),
         ]
     ])
