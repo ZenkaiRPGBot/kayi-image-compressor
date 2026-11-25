@@ -73,6 +73,7 @@ async def test_notify_uses_restart_reason_and_ist_format(
         root=tmp_path,
         reason_path=reason,
         clock=lambda: fixed_utc,
+        retry_delay=0.0,
     )
 
     sent = await notifier.notify_once()
@@ -86,10 +87,10 @@ async def test_notify_uses_restart_reason_and_ist_format(
     assert "reply_markup" not in first_kwargs
     text = first_kwargs["text"]
     assert f"<b>{BRAND_NAME} Online 🟢</b>" in text
-    assert "<b>Changes in this Update:</b>" in text
-    assert "• Fix target size curve" in text
-    assert "• Tighten &lt;owner&gt; guard" in text
+    assert "<b>Status:</b> Running smoothly" in text
+    assert "<b>Note:</b> Fix target size curve Tighten &lt;owner&gt; guard" in text
     assert "<b>Time:</b> <code>09:15 AM IST · Nov 25</code>" in text
+    assert "Changes in this Update" not in text
 
     # Second call on the same instance is ignored by in-process guard
     assert await notifier.notify_once() is False
@@ -149,6 +150,7 @@ async def test_notify_partial_and_total_failure_resilience(
         state_path=state_path,
         root=tmp_path,
         reason_path=tmp_path / "restart_reason.txt",
+        retry_delay=0.0,
     )
     assert await notifier_fail.notify_once() is False
     assert not state_path.exists()
@@ -163,6 +165,8 @@ async def test_notify_partial_and_total_failure_resilience(
         state_path=state_path,
         root=tmp_path,
         reason_path=tmp_path / "restart_reason.txt",
+        max_attempts=1,
+        retry_delay=0.0,
     )
     assert await notifier_partial.notify_once() is True
     assert "failcommit1" in state_path.read_text(encoding="utf-8")

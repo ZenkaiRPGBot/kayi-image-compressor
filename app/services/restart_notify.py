@@ -130,6 +130,8 @@ class RestartNotifier:
         root: Path | None = None,
         reason_path: Path | None = None,
         clock: Callable[[], datetime] | None = None,
+        max_attempts: int = 3,
+        retry_delay: float = 2.0,
     ) -> None:
         self.bot = bot
         self.owner_id = int(owner_id or 0)
@@ -147,6 +149,8 @@ class RestartNotifier:
             else self.root / "restart_reason.txt"
         )
         self.clock = clock or (lambda: datetime.now(IST))
+        self.max_attempts = max(1, int(max_attempts))
+        self.retry_delay = max(0.0, float(retry_delay))
         self._lock = asyncio.Lock()
         self._attempted = False
 
@@ -192,6 +196,25 @@ class RestartNotifier:
                 logger.exception("Restart notification failed")
                 return False
 
+    async def _send_with_retry(self, chat_id: int, content: str) -> bool:
+        for attempt in range(self.max_attempts):
+            try:
+                await self.bot.send_message(
+                    chat_id=chat_id,
+                    text=content,
+                    parse_mode=ParseMode.HTML,
+                )
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                if attempt + 1 < self.max_attempts:
+                    if self.retry_delay > 0:
+                        await asyncio.sleep(self.retry_delay)
+                    continue
+                logger.warning("Could not notify %s: %s", chat_id, type(exc).__name__)
+        return False
+
     async def _notify(self) -> bool:
         targets = self.targets()
         if not targets:
@@ -206,29 +229,31 @@ class RestartNotifier:
             )
             return False
 
-        changes = latest_changes(self.root, self.reason_path)
-        formatted = "\n".join(f"• {html.escape(c)}" for c in changes)
+        reason = ""
+        if has_reason:
+            try:
+                raw = self.reason_path.read_text(encoding="utf-8").strip()
+                self.reason_path.unlink(missing_ok=True)
+                reason = " ".join(
+                    line.strip("-•* ").strip() for line in raw.splitlines() if line.strip()
+                )
+            except Exception:
+                reason = ""
+
         now_str = self.clock().astimezone(IST).strftime("%I:%M %p IST · %b %d")
-        content = (
-            f"<b>{html.escape(self.brand_name)} Online 🟢</b>\n\n"
-            "<b>Changes in this Update:</b>\n"
-            f"{formatted}\n\n"
-            f"<b>Time:</b> <code>{now_str}</code>"
-        )
+        lines = [
+            f"<b>{html.escape(self.brand_name)} Online 🟢</b>",
+            "",
+            "<b>Status:</b> Running smoothly",
+        ]
+        if reason:
+            lines.append(f"<b>Note:</b> {html.escape(reason)}")
+        lines.append(f"<b>Time:</b> <code>{now_str}</code>")
+        content = "\n".join(lines)
 
         delivered = 0
         for chat_id in targets:
-            try:
-                await self.bot.send_message(
-                    chat_id=chat_id,
-                    text=content,
-                    parse_mode=ParseMode.HTML,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.warning("Could not notify %s: %s", chat_id, type(exc).__name__)
-            else:
+            if await self._send_with_retry(chat_id, content):
                 delivered += 1
                 logger.info("Sent restart notification to %s", chat_id)
 
