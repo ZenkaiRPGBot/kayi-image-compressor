@@ -146,7 +146,9 @@ async def _handle_image_upload(
         return
 
     # 4. Strict validation (magic bytes, pixel limit, decompression bombs, animated check)
-    v = validate_image_file(temp_path, config.max_upload_bytes, config.max_image_pixels)
+    v = await asyncio.to_thread(
+        validate_image_file, temp_path, config.max_upload_bytes, config.max_image_pixels
+    )
     if not v.ok:
         cleanup_session_files(temp_path)
         await status_msg.edit_text(f"❌ <b>Image Rejected</b>\n\n{v.error_message}", parse_mode=ParseMode.HTML)

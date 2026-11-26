@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -95,7 +96,7 @@ async def main() -> None:
     await bot.set_webhook(
         url=webhook_url,
         secret_token=config.webhook_secret or None,
-        drop_pending_updates=True,
+        drop_pending_updates=False,
         allowed_updates=["message", "callback_query"],
     )
     await register_bot_commands(bot, config)
@@ -129,8 +130,21 @@ async def main() -> None:
     restart_task = asyncio.create_task(build_restart_notifier(bot, config).notify_once())
     logger.info("Server running on port %d. Ready.", config.port)
 
+    shutdown_event = asyncio.Event()
+
+    def _request_shutdown() -> None:
+        logger.info("Shutdown signal received; stopping gracefully.")
+        shutdown_event.set()
+
+    loop = asyncio.get_running_loop()
+    for _sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(_sig, _request_shutdown)
+        except NotImplementedError:
+            pass
+
     try:
-        await asyncio.Event().wait()  # Run forever
+        await shutdown_event.wait()  # Run forever
     finally:
         cleanup_task.cancel()
         restart_task.cancel()
