@@ -29,6 +29,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiohttp import web
+import aiohttp
 
 from app.config import load_config
 from app.services.cleanup import cleanup_orphaned_files
@@ -130,11 +131,29 @@ async def main() -> None:
     restart_task = asyncio.create_task(build_restart_notifier(bot, config).notify_once())
     logger.info("Server running on port %d. Ready.", config.port)
 
+    async def self_ping_loop() -> None:
+        await asyncio.sleep(60)
+        url = config.webhook_base_url.rstrip("/") + "/health"
+        logger.info("Self-ping active: %s every 14 minutes", url)
+        async with aiohttp.ClientSession() as session:
+            while not shutdown_event.is_set():
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        logger.info("Self-ping returned HTTP %d", resp.status)
+                except Exception as exc:
+                    logger.warning("Self-ping failed: %s", type(exc).__name__)
+                try:
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=840)
+                except asyncio.TimeoutError:
+                    continue
+
     shutdown_event = asyncio.Event()
 
     def _request_shutdown() -> None:
         logger.info("Shutdown signal received; stopping gracefully.")
         shutdown_event.set()
+
+    self_ping_task = asyncio.create_task(self_ping_loop())
 
     loop = asyncio.get_running_loop()
     for _sig in (signal.SIGTERM, signal.SIGINT):
@@ -148,6 +167,7 @@ async def main() -> None:
     finally:
         cleanup_task.cancel()
         restart_task.cancel()
+        self_ping_task.cancel()
         await bot.delete_webhook()
         await bot.session.close()
         await runner.cleanup()
