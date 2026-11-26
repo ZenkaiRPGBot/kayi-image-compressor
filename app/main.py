@@ -134,7 +134,7 @@ async def main() -> None:
     async def self_ping_loop() -> None:
         await asyncio.sleep(60)
         url = config.webhook_base_url.rstrip("/") + "/health"
-        logger.info("Self-ping active: %s every 14 minutes", url)
+        logger.info("Self-ping active: %s every 10 minutes", url)
         async with aiohttp.ClientSession() as session:
             while not shutdown_event.is_set():
                 try:
@@ -143,7 +143,7 @@ async def main() -> None:
                 except Exception as exc:
                     logger.warning("Self-ping failed: %s", type(exc).__name__)
                 try:
-                    await asyncio.wait_for(shutdown_event.wait(), timeout=840)
+                    await asyncio.wait_for(shutdown_event.wait(), timeout=600)
                 except asyncio.TimeoutError:
                     continue
 
